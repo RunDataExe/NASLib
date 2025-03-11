@@ -1,8 +1,11 @@
 dataset: cifar10
 seed: 99
 search_space: nasbench201
+# search_space: simplesearchspace
 out_dir: run
 optimizer: darts
+save_arch_weights: False #! added this as it threw a error in the trainer.py
+eval_only : True #! added to only evaluate but here it is not recognized or maybe overwritten
 
 search:
   checkpoint_freq: 5
@@ -11,7 +14,7 @@ search:
   learning_rate_min: 0.001
   momentum: 0.9
   weight_decay: 0.0003
-  epochs: 50
+  epochs: 0 #! originally 50
   warm_start_epochs: 0
   grad_clip: 5
   train_portion: 0.5
@@ -78,7 +81,7 @@ evaluation:
   learning_rate_min: 0.00
   momentum: 0.9
   weight_decay: 0.0003
-  epochs: 600
+  epochs: 25 #! originally 600 
   warm_start_epochs: 0
   grad_clip: 5
   train_portion: 1.

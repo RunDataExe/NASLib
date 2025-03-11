@@ -1,5 +1,5 @@
 ConfigSpace>=0.4.17
-pyyaml==5.4.1
+pyyaml==6.0
 networkx==2.6.3
 numpy==1.21.5; python_version <= '3.7'
 numpy>=1.22.0; python_version > '3.7'
@@ -17,7 +17,7 @@ pyro-ppl==1.6.0
 scipy==1.4.1
 
 # additional from setup.py prev
-tqdm==4.61.1
+tqdm>=4.64.0
 scikit-learn==1.0.2
 scikit-image==0.19.2
 pytorch-msssim==0.2.1
@@ -26,3 +26,19 @@ tensorwatch==0.9.1
 # from zerocost
 transforms3d
 gdown
+
+
+
+
+# ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+# archai 0.6.8 requires pyyaml==6.0, but you have pyyaml 5.4.1 which is incompatible.
+# archai 0.6.8 requires tqdm>=4.64.0, but you have tqdm 4.61.1 which is incompatible.
+# datasets 2.13.2 requires tqdm>=4.62.1, but you have tqdm 4.61.1 which is incompatible.
+
+
+
+#! ModuleNotFoundError: No module named 'tornado'
+
+tornado
+requests==2.25.1
+matplotlib

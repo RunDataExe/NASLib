@@ -47,7 +47,7 @@ class Trainer(object):
         self.lightweight_output = lightweight_output
 
         # preparations
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
 
         # measuring stuff
         self.train_top1 = utils.AverageMeter()

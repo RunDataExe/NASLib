@@ -65,7 +65,7 @@ class GSparseOptimizer(MetaOptimizer):
         self.normalization = config.search.normalization
         self.normalization_exponent = config.search.normalization_exponent
         self.operation_weights = torch.nn.ParameterList()
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu") #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
 
     @staticmethod
     def update_ops(edge):
@@ -442,7 +442,7 @@ class GSparseMixedOp(MixedOp):
         Args:
             primitives (list): The primitive operations to sample from.
         """
-        super().__init__(primitives)        
+        super().__init__(primitives)
         self.min_cuda_memory = min_cuda_memory
 
     def forward(self, x, edge_data):
@@ -464,3 +464,30 @@ class GSparseMixedOp(MixedOp):
         
         summed = torch.nn.functional.normalize(summed)
         return summed
+
+    #! check if these are correct and what gsparse needs them to be but I think it is currently without implemented and thus these can just be passed 
+
+    def get_weights(self, edge_data):
+        """
+        Return the weights of the operations.
+        """
+        # return edge_data.alpha
+        pass
+    
+    def process_weights(self, weights):
+        """
+        Process the weights of the operations.
+        """
+        # return weights
+        pass
+    
+    def apply_weights(self, x, weights):
+        """
+        Apply the weights to the operations.
+        """
+        # weighted_sum = sum(
+        #     w * op(x, None)
+        #     for w, op in zip(weights, self.primitives)
+        # )
+        # return weighted_sum
+        pass

@@ -32,15 +32,15 @@ logger.setLevel(logging.INFO)  # default DEBUG is too verbose
 utils.log_args(config)
 
 supported_optimizers = {
-    "darts": DARTSOptimizer(config),
-    "gdas": GDASOptimizer(config),
-    "oneshot": OneShotNASOptimizer(config),
-    "rsws": RandomNASOptimizer(config),
-    "re": RegularizedEvolution(config),
-    "rs": RandomSearch(config),
-    "ls": RandomSearch(config),
-    "bananas": Bananas(config),
-    "bp": BasePredictor(config),
+    # "darts": DARTSOptimizer(config),
+    # "gdas": GDASOptimizer(config),
+    # "oneshot": OneShotNASOptimizer(config),
+    # "rsws": RandomNASOptimizer(config),
+    # "re": RegularizedEvolution(config),
+    # "rs": RandomSearch(config),
+    # "ls": RandomSearch(config),
+    # "bananas": Bananas(config),
+    # "bp": BasePredictor(config),
     "gsparsity": GSparseOptimizer(config)
 }
 
@@ -56,6 +56,9 @@ print(search_space)
 dataset_api = get_dataset_api(config.search_space, config.dataset)
 
 optimizer = supported_optimizers[config.optimizer]
+
+import pudb; pudb.set_trace()
+
 optimizer.adapt_search_space(search_space)
 
 trainer = Trainer(optimizer, config, lightweight_output=True)

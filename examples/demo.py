@@ -1,5 +1,5 @@
-import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+# import os
+# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 import pudb
 import logging
 import sys
@@ -17,9 +17,10 @@ from naslib.optimizers import (
 )
 
 from naslib.search_spaces import (
-    NasBench301SearchSpace,
     SimpleCellSearchSpace,
+    NasBench101SearchSpace,
     NasBench201SearchSpace,
+    NasBench301SearchSpace,
     HierarchicalSearchSpace,
 )
 
@@ -57,6 +58,12 @@ supported_optimizers = {
     "bp": BasePredictor(config),
 }
 
+supported_search_space ={
+    "nasbench101" : NasBench101SearchSpace(),
+    "nasbench201" : NasBench201SearchSpace(),
+    "nasbench301" : NasBench301SearchSpace()
+}
+
 # Changing the search space is one line of code
 # search_space = SimpleCellSearchSpace() #! did not work with this thus error has to be in it or related to it
 # search_space = graph.NasBench101SearchSpace()
@@ -69,7 +76,11 @@ elif config.dataset == "cifar10":
 else:
     n_classes = 10  # default
 
+
+# search_space = supported_search_space[config.search_space(n_classes=n_classes)]
+# search_space = NasBench101SearchSpace(n_classes=n_classes)
 search_space = NasBench201SearchSpace(n_classes=n_classes)
+# search_space = NasBench301SearchSpace(n_classes=n_classes)
 
 
 # Changing the optimizer is one line of code

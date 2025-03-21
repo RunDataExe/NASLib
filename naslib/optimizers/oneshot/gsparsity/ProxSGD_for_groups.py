@@ -43,13 +43,22 @@ class ProxSGD(Optimizer):
         if closure is not None:
             loss = closure()
 
+        #! original
+        # for group in self.param_groups:
+        #     b_group_norm = torch.zeros(1).cuda()
+        #     if self.normalization == "none":
+        #         dim_group = (torch.ones(1)).cuda()
+        #     else: # "mul" or "div" normalization
+        #         dim_group = (torch.zeros(1)).cuda()
+
+
         for group in self.param_groups:
-            b_group_norm = torch.zeros(1).cuda()
+            b_group_norm = torch.zeros(1)
             if self.normalization == "none":
-                dim_group = (torch.ones(1)).cuda()
+                dim_group = (torch.ones(1))
             else: # "mul" or "div" normalization
-                dim_group = (torch.zeros(1)).cuda()
-                
+                dim_group = (torch.zeros(1))
+
             for x in group['params']:                
                 if x.grad is None:
                     continue

@@ -70,7 +70,7 @@ class DrNASOptimizer(DARTSOptimizer):
         self.reg_scale = 1e-3
         # self.reg_scale = config.reg_scale
         self.epochs = epochs
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
+        self.device = torch.device("cpu") #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
 
     def new_epoch(self, epoch):
         super().new_epoch(epoch)

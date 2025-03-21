@@ -57,7 +57,6 @@ dataset_api = get_dataset_api(config.search_space, config.dataset)
 
 optimizer = supported_optimizers[config.optimizer]
 
-import pudb; pudb.set_trace()
 
 optimizer.adapt_search_space(search_space)
 

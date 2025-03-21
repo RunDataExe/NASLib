@@ -74,7 +74,7 @@ class DARTSOptimizer(MetaOptimizer):
         self.loss = loss_criteria
 
         self.architectural_weights = torch.nn.ParameterList()
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu") #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
 
         self.perturb_alphas = None
         self.epsilon = 0

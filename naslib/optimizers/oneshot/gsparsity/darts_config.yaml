@@ -1,8 +1,10 @@
 dataset: cifar100
 seed: 20
 search_space: darts
-out_dir: /work/dlclarge2/agnihotr-ml/NASLib/naslib/optimizers/oneshot/gsparsity/run
+out_dir: naslib/optimizers/oneshot/gsparsity/run
 optimizer: gsparsity
+
+verification: darts_config.yaml
 
 search:
  

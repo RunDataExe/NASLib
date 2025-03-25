@@ -15,7 +15,7 @@ from naslib.optimizers import (
     LocalSearch,
     Bananas,
     BasePredictor,
-    GSparseOptimizer
+    GSparseOptimizer,
 )
 
 from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
@@ -23,6 +23,7 @@ from naslib import utils
 from naslib.utils import setup_logger, get_dataset_api
 from naslib.search_spaces.core.query_metrics import Metric
 
+#! --config-file path of config file
 config = utils.get_config_from_args()
 utils.set_seed(config.seed)
 
@@ -44,14 +45,15 @@ supported_optimizers = {
     "gsparsity": GSparseOptimizer(config)
 }
 
-supported_search_space ={
-    "nasbench201" : NasBench201SearchSpace(),
-    "nasbench301" : NasBench301SearchSpace()
+supported_search_space = {
+    "nasbench201": NasBench201SearchSpace(),
+    "nasbench301": NasBench301SearchSpace(),
 }
 
-#search_space = NasBench201SearchSpace()
+
+# search_space = NasBench201SearchSpace()
 search_space = supported_search_space[config.search_space]
-#dataset_api = get_dataset_api("nasbench201", config.dataset)
+# dataset_api = get_dataset_api("nasbench201", config.dataset)
 print(search_space)
 dataset_api = get_dataset_api(config.search_space, config.dataset)
 
@@ -67,7 +69,9 @@ trainer.search()
 #    checkpoint = utils.get_last_checkpoint(config) if config.resume else ""
 #    trainer.search(resume_from=checkpoint)
 
-#checkpoint = utils.get_last_checkpoint(config, search_model=True) if config.resume else ""
-#trainer.evaluate(resume_from=checkpoint, dataset_api=dataset_api)
-#model="/work/dlclarge2/agnihotr-ml/NASLib/naslib/optimizers/oneshot/gsparsity/run/darts/cifar100/gsparsity/9/search/model_final.pth"
-trainer.evaluate(dataset_api=dataset_api, metric=Metric.VAL_ACCURACY, search_model=model)
+# checkpoint = utils.get_last_checkpoint(config, search_model=True) if config.resume else ""
+# trainer.evaluate(resume_from=checkpoint, dataset_api=dataset_api)
+# model="/work/dlclarge2/agnihotr-ml/NASLib/naslib/optimizers/oneshot/gsparsity/run/darts/cifar100/gsparsity/9/search/model_final.pth"
+trainer.evaluate(
+    dataset_api=dataset_api, metric=Metric.VAL_ACCURACY, search_model=model
+)

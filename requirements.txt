@@ -42,3 +42,4 @@ gdown
 tornado
 requests==2.25.1
 matplotlib
+seaborn

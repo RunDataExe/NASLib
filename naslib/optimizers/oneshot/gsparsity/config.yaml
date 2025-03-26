@@ -1,13 +1,22 @@
-dataset: cifar100
+dataset: cifar100 #! originally cifar100 (cifar100 with nasbench301 is working why not cifar10?)
 seed: 1
-search_space: nasbench201
+search_space: nasbench301 #! originally nasbench201
 out_dir: naslib/optimizers/oneshot/gsparsity/run
 optimizer: gsparsity
 
-verification: config.yaml
+
+save_arch_weights: False #! added this as it threw a error in the trainer.py
+verification: config.yaml #! added this to identify which config is
 
 search:
- 
+  #! self implemented
+  checkpoint_freq: 5 
+  cutout: False
+  cutout_length: 16
+  cutout_prob: 1.0
+  drop_path_prob: 0.0
+
+  #! self implemented
 
   #GSparsity
   grad_clip: 0
@@ -19,7 +28,7 @@ search:
   normalization_exponent: 0.5
   batch_size: 128
   learning_rate_min: 0.0001
-  epochs: 100
+  epochs: 100 #! originally 100
   warm_start_epochs: 0
   train_portion: 0.95
   data_size: 50000

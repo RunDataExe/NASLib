@@ -42,17 +42,27 @@ supported_optimizers = {
     # "ls": RandomSearch(config),
     # "bananas": Bananas(config),
     # "bp": BasePredictor(config),
-    "gsparsity": GSparseOptimizer(config)
+    "gsparsity": GSparseOptimizer(config),
 }
+
+if config.dataset == "cifar100":
+    n_classes = 100
+elif config.dataset == "cifar10":
+    n_classes = 10
+else:
+    n_classes = 10  # default
 
 supported_search_space = {
     "nasbench201": NasBench201SearchSpace(),
     "nasbench301": NasBench301SearchSpace(),
 }
 
+# search_space = NasBench201SearchSpace(n_classes=n_classes)
+search_space = NasBench301SearchSpace(n_classes=n_classes)
+
 
 # search_space = NasBench201SearchSpace()
-search_space = supported_search_space[config.search_space]
+# search_space = supported_search_space[config.search_space]
 # dataset_api = get_dataset_api("nasbench201", config.dataset)
 print(search_space)
 dataset_api = get_dataset_api(config.search_space, config.dataset)

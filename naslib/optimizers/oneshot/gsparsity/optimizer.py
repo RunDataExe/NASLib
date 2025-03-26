@@ -546,29 +546,37 @@ class GSparseMixedOp(MixedOp):
         summed = torch.nn.functional.normalize(summed)
         return summed
 
-    #! check if these are correct and what gsparse needs them to be but I think it is currently without implemented and thus these can just be passed
+    # ! I have to implement these and verify them
 
     def get_weights(self, edge_data):
         """
         Return the weights of the operations.
         """
-        # return edge_data.alpha
-        pass
+        import pudb
+
+        pudb.set_trace()
+
+        return edge_data.alpha  # use pudb to check if this has alpha
 
     def process_weights(self, weights):
         """
         Process the weights of the operations.
         """
-        # return weights
-        pass
+        import pudb
+
+        pudb.set_trace()
+
+        return torch.softmax(
+            weights, dim=-1
+        )  # or normalize torch.nn.functional.normalize(weights)
 
     def apply_weights(self, x, weights):
         """
         Apply the weights to the operations.
         """
-        # weighted_sum = sum(
-        #     w * op(x, None)
-        #     for w, op in zip(weights, self.primitives)
-        # )
-        # return weighted_sum
-        pass
+        import pudb
+
+        pudb.set_trace()
+
+        weighted_sum = sum(w * op(x, None) for w, op in zip(weights, self.primitives))
+        return weighted_sum

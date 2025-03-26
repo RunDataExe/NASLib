@@ -1,9 +1,9 @@
 dataset: cifar10 #! originally cifar10
 seed: 99
-search_space: nasbench201
+search_space: nasbench301
 # search_space: simplesearchspace
 out_dir: run #! is used to also safe the loggs
-optimizer: gsparsity #! originally darts
+optimizer: drnas #! originally darts
 save_arch_weights: False #! added this as it threw a error in the trainer.py
 # eval_only : True # eval only is given via argument
 

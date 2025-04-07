@@ -32,6 +32,8 @@ class ProxSGD(Optimizer):
                 "Invalid normalization exponent parameter: {}".format(momentum)
             )
 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.normalization = normalization
         self.normalization_exponent = normalization_exponent
         defaults = dict(
@@ -55,21 +57,12 @@ class ProxSGD(Optimizer):
         if closure is not None:
             loss = closure()
 
-        #! original
         for group in self.param_groups:
-            b_group_norm = torch.zeros(1).cuda()
+            b_group_norm = torch.zeros(1).to(self.device)
             if self.normalization == "none":
-                dim_group = (torch.ones(1)).cuda()
+                dim_group = torch.ones(1).to(self.device)
             else:  # "mul" or "div" normalization
-                dim_group = (torch.zeros(1)).cuda()
-
-            #! without cuda
-            # for group in self.param_groups:
-            #     b_group_norm = torch.zeros(1)
-            #     if self.normalization == "none":
-            #         dim_group = (torch.ones(1))
-            #     else: # "mul" or "div" normalization
-            #         dim_group = (torch.zeros(1))
+                dim_group = torch.zeros(1).to(self.device)
 
             for x in group["params"]:
                 if x.grad is None:

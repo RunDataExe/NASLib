@@ -169,6 +169,20 @@ class DrNASOptimizer(DARTSOptimizer):
                 [a for a in self.architectural_weights]
             )
         )
+
+        #! Fixes the error when copying, regarding non leaf tensors in the graph
+        def prepare_for_clone(edge):
+            if edge.data.has("alpha"):
+                # Create a detached copy that's still available for discretization
+                edge.data.set("alpha", edge.data.alpha.detach().clone(), shared=True)
+            # Remove any temporary tensors from sampling
+            if edge.data.has("sampled_arch_weight"):
+                edge.data.remove("sampled_arch_weight")
+
+        self.graph.update_edges(
+            prepare_for_clone, scope=self.scope, private_edge_data=True
+        )
+
         graph = self.graph.clone().unparse()
         graph.prepare_discretization()
 

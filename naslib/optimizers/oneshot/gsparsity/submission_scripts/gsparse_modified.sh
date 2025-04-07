@@ -11,7 +11,7 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=ruben.weber@students.uni-mannheim.de
 
-python naslib/optimizers/oneshot/gsparsity/configurator.py \
+python naslib/optimizers/oneshot/gsparsity/configurator_gs_modified.py \
     --optimizer gsparsity \
     --search_space nasbench301 \
     --dataset cifar10 \

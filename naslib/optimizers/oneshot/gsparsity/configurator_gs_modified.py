@@ -11,9 +11,12 @@ from naslib.optimizers import (
     RandomSearch,
     LocalSearch,
     Bananas,
-    GSparseOptimizer,
     DrNASOptimizer,
+    # Remove the original GSparseOptimizer import
 )
+
+# Import the modified GSparseOptimizer directly
+from naslib.optimizers.oneshot.gsparsity.optimizer_gs_modified import GSparseOptimizer
 
 from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
 from naslib import utils

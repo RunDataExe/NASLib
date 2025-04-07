@@ -535,13 +535,12 @@ class GSparseMixedOp(MixedOp):
         summed = 0
         for op in self.primitives:
             try:
-                len(op.op)
-                summed += op(x, None)
-            except AttributeError:
                 if op.training and edge_data.has("alpha"):
                     summed += op.weight * op(x, None)
                 else:
                     summed += op(x, None)
+            except AttributeError:
+                summed += op(x, None)
 
         summed = torch.nn.functional.normalize(summed)
         return summed

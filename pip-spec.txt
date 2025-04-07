@@ -37,7 +37,7 @@ matplotlib-inline==0.1.6
 more-itertools==9.1.0
 nasbench301 @ git+https://github.com/automl/nasbench301@f5e8f308022e3260f4f5976a1bf355ec16fd93cd
 nasbench_pytorch @ git+https://github.com/romulus0914/NASBench-PyTorch@37bc332bc6802e0375d8cca839d54f47524487fb
--e git+https://github.com/RunDataExe/NASLib.git@676b6478e073035e3404ef161c1bbd3f96c83a45#egg=naslib
+git+https://github.com/RunDataExe/NASLib.git@676b6478e073035e3404ef161c1bbd3f96c83a45
 nbformat==5.8.0
 networkx==2.6.3
 ngboost==0.3.11

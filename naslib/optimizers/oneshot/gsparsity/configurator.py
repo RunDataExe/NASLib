@@ -51,7 +51,8 @@ parser.add_argument(
     default="naslib/optimizers/oneshot/gsparsity/test",
     help="Output directory",
 )
-parser.add_argument("--epochs", type=int, default=100, help="Number of search epochs")
+parser.add_argument("--train_epochs", type=int, default=100, help="Number of search epochs")
+parser.add_argument("--eval_epochs", type=int, default=600, help="Number of evaluation epochs")
 
 args = parser.parse_args()
 
@@ -61,7 +62,8 @@ search_space_type = args.search_space
 dataset = args.dataset
 seed = args.seed
 out_dir = args.out_dir
-epochs = args.epochs
+train_epochs = args.train_epochs
+eval_epochs = args.eval_epochs
 
 #! Verify this shortly
 # ! get automated script generation and running from history
@@ -86,7 +88,7 @@ evaluation = {
     "learning_rate_min": 0.00,
     "momentum": 0.9,
     "weight_decay": 0.0003,
-    "epochs": 600,  #! originally 600
+    "epochs": eval_epochs,
     "warm_start_epochs": 0,
     "grad_clip": 5,
     "train_portion": 1.0,
@@ -207,21 +209,21 @@ optimizer_configs = {
     "rs": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": epochs,
+            "epochs": train_epochs,
             "fidelity": -1,
         },
     },
     "ls": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": epochs,
+            "epochs": train_epochs,
             "num_init": 10,
         },
     },
     "bananas": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
+            "epochs": train_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
             "num_ensemble": 5,
@@ -237,7 +239,7 @@ optimizer_configs = {
     "drnas": {
         "search": {  # ? https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/drnas-c10-original/search-progressive-exp-20210227-085319/log.txt
             "checkpoint_freq": 5,
-            "epochs": epochs,
+            "epochs": train_epochs,
             "batch_size": 48,  # originally 128 in gs logs 48
             "arch_learning_rate": 0.0006,  # originally 0.0003 in gs logs 0.0006
             "cutout": False,  # originally not here in gs logs False
@@ -253,7 +255,7 @@ optimizer_configs = {
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
             "checkpoint_freq": 5,
-            "epochs": epochs,  # in paper 100
+            "epochs": train_epochs,  # in paper 100
             "grad_clip": 0,  # in paper 0
             "weight_decay": 60,  # original 120 in paper 60
             "threshold": 0.000001,
@@ -263,7 +265,7 @@ optimizer_configs = {
             "momentum": 0.8,  # in paper 0.8
             "learning_rate_min": 0.0001,  # in paper 0.0001
             "batch_size": 64,  # original 128; in log 64
-            "train_portion": 1,  # originally 0.95 in paper 1
+            "train_portion": 0.95,  # originally 0.95 in paper 1
             "cutout": False,  # # in paper False (I think NASLIB only needs this for gsparsity on nasbench201)
             "cutout_length": 16,  # in paper 16 (I think NASLIB only needs this for gsparsity on nasbench201)
             # "cutout_prob": 1.0,  # (I think NASLIB only needs this for gsparsity on nasbench201)
@@ -291,8 +293,8 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
 
     config.dataset = dataset
 
-    # Dataset path - FIX: Remove the tuple notation (the parentheses and comma)
     config.data = str(get_project_root()) + "/data"  # path to naslib/data directory
+    print(f"Data path: {config.data}")
 
     # Set search space
     config.search_space = search_space_type

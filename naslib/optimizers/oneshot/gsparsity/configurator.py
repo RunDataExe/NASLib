@@ -1,23 +1,33 @@
-import os
 import logging
+import os
 import sys
 import naslib as nl
 from fvcore.common.config import CfgNode
 import json
 import argparse
 
+import optuna
+import copy
+# from optuna import DEHBSampler, DEHBPruner
+import time
+
 from naslib.defaults.trainer import Trainer
 from naslib.optimizers import (
     RandomSearch,
     LocalSearch,
     Bananas,
-    GSparseOptimizer,
+    # GSparseOptimizer,
     DrNASOptimizer,
+    ZCP_GSparseOptimizer,
+    Inverted_Bananas,
+    Inverted_Bananas_GsparseOptimizer,
+    Inverted_Bananas_ZCP_GsparseOptimizer,
 )
-
-from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
+from naslib.optimizers.oneshot.gsparsity.shape_optimizer import GSparseOptimizer
+from naslib.utils import get_zc_benchmark_api
 from naslib import utils
-from naslib.utils import setup_logger, get_dataset_api, get_project_root
+from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
+from naslib.utils import setup_logger, get_dataset_api, get_project_root, get_train_val_loaders
 from naslib.search_spaces.core.query_metrics import Metric
 
 # Parse command-line arguments
@@ -28,7 +38,14 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (e.g., rs, ls, bananas, drnas, gsparsity)",
+    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity)",
+)
+# Add ZCP-specific arguments
+parser.add_argument(
+    "--zcp_method",
+    type=str,
+    default="jacov",
+    help="Zero-cost predictor method (synflow, grad_norm, fisher, grasp, jacov, snip, flops, params)",
 )
 parser.add_argument(
     "--search_space",
@@ -40,7 +57,7 @@ parser.add_argument(
     "--dataset",
     type=str,
     required=True,
-    help="Dataset (e.g., cifar10, cifar100, imagenet16-120)",
+    help="Dataset (e.g., cifar10, cifar100, ImageNet16-120)",
 )
 parser.add_argument(
     "--seed", type=int, default=42, help="Random seed for reproducibility"
@@ -51,7 +68,7 @@ parser.add_argument(
     default="naslib/optimizers/oneshot/gsparsity/test",
     help="Output directory",
 )
-parser.add_argument("--train_epochs", type=int, default=100, help="Number of search epochs")
+parser.add_argument("--search_epochs", type=int, default=100, help="Number of search epochs")
 parser.add_argument("--eval_epochs", type=int, default=600, help="Number of evaluation epochs")
 
 args = parser.parse_args()
@@ -62,13 +79,35 @@ search_space_type = args.search_space
 dataset = args.dataset
 seed = args.seed
 out_dir = args.out_dir
-train_epochs = args.train_epochs
+search_epochs = args.search_epochs
 eval_epochs = args.eval_epochs
+zcp_method = args.zcp_method
+
+#! Multiply time that it takes for random search by a factor that captures the prunning rate that was used in the zcp-gs-nas and gs-nas methods, how to make it such that only the search of the second phase is pruned? Should I not take 3 zcp´s per condition but have it as HP that is automatically tuned as well? Thus able to have more compute to tune one methodoligy and probably better results.
+
+#! Use the same random seeds for compared conditions, such that results are more comparable as they start more simililar e.g. param initialization, which images are sampled etc.
+
+#! if I change search space to carry information of shapes than this is only the case for non querry optimizers and thus the comparability might suffer a bit. Also mention that I only do this to use the ZCP that are already implemented in NASLib. Else it would probably faster 
+
+#! check for cifar10, 100 and ImageNet16-120
+
+#! Please save my search trajectory, best model, best val acc and so on. Trainer.py should have options for this. Look at both uploaded files and decide, what the best approach would be. It should be able to resume from a checkpoint. Be aware of the interaction of HPO via Optuna and the training of the models them self.
+
+
+#! TODO RAW DATA SPEICHERN, Irgend ein logging tool 
+
+#! for any bo + any gs nas -> estimated bo time + actual oneshot time
+
+# ! TPESampler() and HyperbandPruner(), maximize accuracy. For blackbox use querries for prunning; for oneshot use epochs for prunning, for commbined use querry + epoch estimated times; is it possible to start with default hpo setting and go from there?
 
 #! Verify this shortly
 # ! get automated script generation and running from history
 # ! modified version of this for gsparsity and modified version of gsparsity
 
+# TODO check if zcp bananas and inverted bananas are giving correct results and are truely using the zcps
+# TODO check if zcp gsparsity is giving correct results
+# TODO check if code for each method runs on nasbench201 cifar10, cifar100, ImageNet16-120 and on nasbench301 cifar10
+# TODO does zcp_gsparsity use cuda?
 # TODO how to treat cutout for gsparsity? Does it influence on NASbench301? Also how to treat with respect to hpo? If it does not influence but hpo is wasting time on it would be tragic
 # TODO Checkpointing and resuming
 # TODO implement the hyperparameters for all (further down is a list)
@@ -209,21 +248,21 @@ optimizer_configs = {
     "rs": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": train_epochs,
+            "epochs": search_epochs,
             "fidelity": -1,
         },
     },
     "ls": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": train_epochs,
+            "epochs": search_epochs,
             "num_init": 10,
         },
     },
     "bananas": {
         "search": {
             "checkpoint_freq": 5,
-            "epochs": train_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
+            "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
             "num_ensemble": 5,
@@ -236,10 +275,32 @@ optimizer_configs = {
             "num_candidates": 100,  # no correspondance but resonable value for aquisition function
         },
     },
+    "zcp_bananas": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": "path",
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,  # no correspondance but resonable value for aquisition function
+            "zc": True,  # Enable zero-cost predictors
+            "use_zc_api": True,
+            "zc_names": [zcp_method],  # Should be a list
+            "zc_only": True,  # Set to True if you want to use only ZC predictors
+            "batch_size": 64, # threw error without
+            "train_portion": 0.5 # threw error without
+        },
+    },
     "drnas": {
         "search": {  # ? https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/drnas-c10-original/search-progressive-exp-20210227-085319/log.txt
             "checkpoint_freq": 5,
-            "epochs": train_epochs,
+            "epochs": search_epochs,
             "batch_size": 48,  # originally 128 in gs logs 48
             "arch_learning_rate": 0.0006,  # originally 0.0003 in gs logs 0.0006
             "cutout": False,  # originally not here in gs logs False
@@ -255,7 +316,7 @@ optimizer_configs = {
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
             "checkpoint_freq": 5,
-            "epochs": train_epochs,  # in paper 100
+            "epochs": search_epochs,  # in paper 100
             "grad_clip": 0,  # in paper 0
             "weight_decay": 60,  # original 120 in paper 60
             "threshold": 0.000001,
@@ -271,11 +332,127 @@ optimizer_configs = {
             # "cutout_prob": 1.0,  # (I think NASLIB only needs this for gsparsity on nasbench201)
         },
         #! zcp-bananas
-        #! zcp-gsparsity
+        #! zcp_gsparsity
         #! bananas-gsparsity
         #! zcp-bananas-gsparsity
-        #! bananas-zcp-gsparsity
-        #! zcp-bananas-zcp-gsparsity
+
+        #! Is there a straight forward way of combining inverted_bananas-gsparsity; zcp_inverted_bananas-gsparsity; inverted_bananas-zcp_gsparsity; zcp_inverted_bananas-zcp_gsparsity such that inverted_bananas is first applied to the search space, searches for the worst architectures, removes them and then zcp_gsparsity or gsparsity is applied reguraly to the remaining architectures?
+    },
+    "zcp_gsparsity": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,
+            "grad_clip": 0,
+            "weight_decay": 60,
+            "threshold": 0.000001,
+            "normalization": "div",
+            "normalization_exponent": 0.5,
+            "learning_rate": 0.001,
+            "momentum": 0.8,
+            "learning_rate_min": 0.0001,
+            "batch_size": 64,
+            "train_portion": 0.95,
+            "cutout": False,
+            "cutout_length": 16,
+            "zcp_method": zcp_method,
+        },
+    },
+    "inverted_bananas": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": "path",
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,  # no correspondance but resonable value for aquisition function
+        },
+    },
+    "inverted_bananas_gsparsity": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,
+            "batch_size": 64,
+            "train_portion": 0.5,
+            "learning_rate": 0.001,
+            "learning_rate_min": 0.0001,
+            "momentum": 0.8,
+        },
+        # Stage 1 configuration (Inverted BANANAS)
+        "stage1": {
+            "epochs": search_epochs // 3,
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": "path",
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,
+            "removal_percentage": 0.3,
+        },
+        # Stage 2 configuration (GSparsity)
+        "stage2": {
+            "epochs": search_epochs * 2 // 3,
+            "grad_clip": 0,
+            "weight_decay": 60,
+            "threshold": 0.000001,
+            "normalization": "div",
+            "normalization_exponent": 0.5,
+            "learning_rate": 0.001,
+            "momentum": 0.8,
+            "learning_rate_min": 0.0001,
+            "cutout": False,
+            "cutout_length": 16,
+        },
+    },
+    "inverted_bananas_zcp_gsparsity": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,
+            "batch_size": 64,
+            "train_portion": 0.5,
+            "learning_rate": 0.001,
+            "learning_rate_min": 0.0001,
+            "momentum": 0.8,
+        },
+        # Stage 1 configuration (Inverted BANANAS)
+        "stage1": {
+            "epochs": search_epochs // 3,
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": "path",
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,
+            "removal_percentage": 0.3,
+        },
+        # Stage 2 configuration (ZCP GSparsity)
+        "stage2": {
+            "epochs": search_epochs * 2 // 3,
+            "grad_clip": 0,
+            "weight_decay": 60,
+            "threshold": 0.000001,
+            "normalization": "div",
+            "normalization_exponent": 0.5,
+            "learning_rate": 0.001,
+            "momentum": 0.8,
+            "learning_rate_min": 0.0001,
+            "cutout": False,
+            "cutout_length": 16,
+            "zcp_method": zcp_method,
+        },
     },
 }
 
@@ -288,7 +465,7 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
     """Update the configuration with experiment-specific settings"""
     # Set dataset name
 
-    if optimizer_type == "gsparsity":
+    if optimizer_type == "gsparsity" or optimizer_type == "zcp_gsparsity" or optimizer_type == "inverted_bananas-gsparsity" or optimizer_type == "zcp_inverted_bananas-gsparsity" or optimizer_type == "drnas":
         config.save_arch_weights = False
 
     config.dataset = dataset
@@ -315,7 +492,7 @@ def get_valid_dataset_and_classes(search_space_type, requested_dataset=None):
     For nasbench201, allows selection from supported datasets.
     """
     valid_datasets = {
-        "nasbench201": {"cifar10": 10, "cifar100": 100, "imagenet16-120": 120},
+        "nasbench201": {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120},
         "nasbench301": {"cifar10": 10},
     }
 
@@ -352,6 +529,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     # Set up the logger
     logger = setup_logger(config.save + "/log.log")
     logger.setLevel(logging.INFO)
+    
 
     # Log the configuration
     logger.info(f"Configuration is \n{config}")
@@ -385,6 +563,14 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         optimizer = DrNASOptimizer()
     elif optimizer_type == "gsparsity":
         optimizer = GSparseOptimizer(config)
+    elif optimizer_type == "zcp_gsparsity":
+        optimizer = ZCP_GSparseOptimizer(config)
+    elif optimizer_type == "inverted_bananas":
+        optimizer = Inverted_Bananas(config)
+    elif optimizer_type == "inverted_bananas_gsparsity":
+        optimizer = Inverted_Bananas_GsparseOptimizer(config)
+    elif optimizer_type == "inverted_bananas_zcp_gsparsity":
+        optimizer = Inverted_Bananas_ZCP_GsparseOptimizer(config)
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
@@ -393,8 +579,17 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
     elif optimizer_type == "gsparsity":
         optimizer.adapt_search_space(search_space=search_space)
-    elif optimizer_type in ["rs", "ls", "bananas"]:
+    elif optimizer_type == "zcp_gsparsity":
+        train_loader, _, _, _, _ = get_train_val_loaders(config)
+        optimizer.adapt_search_space(search_space=search_space, train_loader=train_loader)
+    elif optimizer_type in ["rs", "ls", "bananas", "inverted_bananas"]:
         optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api)
+    elif optimizer_type in ["inverted_bananas_gsparsity", "inverted_bananas_zcp_gsparsity"]:
+        # For two-stage optimizers
+        train_loader = None
+        if "zcp" in optimizer_type:
+            train_loader, _, _, _, _ = get_train_val_loaders(config)
+        optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api, train_loader=train_loader)
     else:
         optimizer.adapt_search_space(search_space=search_space)
 
@@ -443,6 +638,8 @@ def main():
             config, optimizer_type, search_space_type, valid_dataset, s, out_dir
         )
 
+        # Todo I want to save the search trajectory of each run
+        # ! convert_naslib_nb201_to_str
         # Run the optimizer
         search_trajectory, best_model, best_val_acc = run_optimizer(
             optimizer_type, search_space_type, valid_dataset, config, s

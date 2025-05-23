@@ -241,10 +241,10 @@ class GSparseOptimizer(MetaOptimizer):
                                     edge.data.op.primitives[i].op[j].weight
                                 )
                                 if hasattr(edge.data.op.primitives[i].op[j], 'shapes'):
-                                    print(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
-                                    print(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
+                                    logger.info(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
+                                    logger.info(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
                                 else:
-                                    print(f"Primitive {i} operation {j} has no shape information.")
+                                    logger.info(f"Primitive {i} operation {j} has no shape information.")
                                 weight += (
                                     torch.norm(
                                         edge.data.op.primitives[i].op[j].weight, 2
@@ -282,10 +282,10 @@ class GSparseOptimizer(MetaOptimizer):
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
                         if hasattr(edge.data.op.primitives[i], 'shapes'):
-                            print(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
-                            print(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
+                            logger.info(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
+                            logger.info(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
                         else:
-                            print(f"Primitive {i} has no shape information.")
+                            logger.info(f"Primitive {i} has no shape information.")
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2
@@ -413,10 +413,10 @@ class GSparseOptimizer(MetaOptimizer):
                                     edge.data.op.primitives[i].op[j].weight
                                 )
                                 if hasattr(edge.data.op.primitives[i].op[j], 'shapes'):
-                                    print(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
-                                    print(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
+                                    logger.info(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
+                                    logger.info(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
                                 else:
-                                    print(f"Primitive {i} operation {j} has no shape information.")
+                                    logger.info(f"Primitive {i} operation {j} has no shape information.")
                                 weight += (
                                     torch.norm(
                                         edge.data.op.primitives[i].op[j].weight, 2
@@ -454,10 +454,10 @@ class GSparseOptimizer(MetaOptimizer):
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
                         if hasattr(edge.data.op.primitives[i], 'shapes'):
-                            print(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
-                            print(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
+                            logger.info(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
+                            logger.info(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
                         else:
-                            print(f"Primitive {i} has no shape information.")
+                            logger.info(f"Primitive {i} has no shape information.")
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2

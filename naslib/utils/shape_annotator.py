@@ -1,197 +1,318 @@
 import torch
 import logging
-import re
-from naslib.utils.shape_tracker import ShapeTracker
+import json
+import os
+from typing import Dict, Any
+
+from .shape_tracker import ShapeTracker
 
 logger = logging.getLogger(__name__)
 
+
+#It looks relative good. Primitive 4 is still missing. 
+# Also it seems to do [05/23 12:54:20 nl.utils.shape_annotator]: Attaching shape information to graph operations
+# [05/23 12:54:20 nl.utils.shape_annotator]: Processed 6 edges in graph makrograph-edge(2,3).cell
+
+# and thus misses makrograph-edge(1,2)
+
+# {
+#     "makrograph-edge(1,2).seq.0": {
+#         "input_shape": "(torch.Size([64, 3, 32, 32]),)",
+#         "output_shape": "torch.Size([64, 16, 32, 32])"
+#     },
+#     "makrograph-edge(1,2).seq.1": {
+#         "input_shape": "(torch.Size([64, 16, 32, 32]),)",
+#         "output_shape": "torch.Size([64, 16, 32, 32])"
+#     },
+#     "makrograph-edge(2,3).cell-edge(1,2).primitive-0": {
+#         "input_shape": "(torch.Size([64, 16, 32, 32]), None)",
+#         "output_shape": "torch.Size([64, 16, 32, 32])"
+#     },
+
+# The same happens for makrograph-edge(19,20)
+
+#     "makrograph-edge(19,20).op.0": {
+#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
+#         "output_shape": "torch.Size([64, 64, 8, 8])"
+#     },
+#     "makrograph-edge(19,20).op.1": {
+#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
+#         "output_shape": "torch.Size([64, 64, 8, 8])"
+#     },
+#     "makrograph-edge(19,20).op.2": {
+#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
+#         "output_shape": "torch.Size([64, 64, 1, 1])"
+#     },
+#     "makrograph-edge(19,20).op.3": {
+#         "input_shape": "(torch.Size([64, 64, 1, 1]),)",
+#         "output_shape": "torch.Size([64, 64])"
+#     },
+#     "makrograph-edge(19,20).op.4": {
+#         "input_shape": "(torch.Size([64, 64]),)",
+#         "output_shape": "torch.Size([64, 10])"
+#     }
+# }
+
+
 class ShapeAnnotator:
-    """Annotates shape information on graph edges and operations."""
+    """
+    Annotates graph operations with tensor shape information.
+    
+    This class uses the ShapeTracker to collect shape information during a forward pass
+    and then maps this information to the actual operation objects in the graph.
+    """
     
     def __init__(self, config):
+        """
+        Initialize the ShapeAnnotator with configuration parameters.
+        
+        Args:
+            config: Configuration containing dataset and batch size information
+        """
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     def annotate_graph(self, graph):
         """
-        Annotate the graph with shape information.
+        Main method to annotate a graph with shape information.
         
         Args:
             graph: The graph to annotate
-        """
-        # 1. Collect shape information
-        shape_info = self._collect_shape_info(graph)
-        
-        # 2. Annotate the graph edges with shape information
-        self._annotate_edges(graph, shape_info)
-        
-        logger.info(f"Graph annotation completed with {len(shape_info)} shape entries")
-        return graph
-    
-    def _collect_shape_info(self, graph):
-        """
-        Collect shape information by running a forward pass with a dummy input.
-        
-        Args:
-            graph: The graph to analyze
             
         Returns:
-            dict: Dictionary mapping module names to shape information
+            The annotated graph
         """
-        graph.eval()  # Set to evaluation mode
-        tracker = ShapeTracker()
-        tracker.register_hooks(graph)
+        # Create dummy input tensor
+        input_shape = self._get_input_shape()
+        dummy_input = torch.randn(input_shape).to(self.device)
         
-        try:
-            # Create appropriate dummy input based on dataset
-            if self.config.dataset == "cifar10" or self.config.dataset == "cifar100":
-                dummy_input = torch.randn(self.config.search.batch_size, 3, 32, 32).to(self.device)
-            elif self.config.dataset == "ImageNet16-120":
-                dummy_input = torch.randn(self.config.search.batch_size, 3, 16, 16).to(self.device)
-            else:
-                dummy_input = torch.randn(self.config.search.batch_size, 3, 32, 32).to(self.device)  # Default
-
-            # Run a forward pass
-            graph(dummy_input)
-            
-            # Get shape information
-            shape_info = tracker.get_shape_info()
-            return shape_info
-            
-        except Exception as e:
-            logger.error(f"Error collecting shape information: {str(e)}")
-            return {}
-        finally:
-            # Clean up hooks
-            tracker.clear_hooks()
+        # Collect shape information
+        shape_info = self._collect_shapes(graph, dummy_input)
+        
+        # Save shape info to file for debugging
+        self._save_shape_info(shape_info)
+        
+        # Map shape information to graph operations
+        self._attach_shapes_to_graph(graph, shape_info)
+        
+        return graph
     
-    def _annotate_edges(self, graph, shape_info):
+    def _get_input_shape(self):
         """
-        Annotate graph edges with shape information.
+        Determine the shape of the input tensor based on dataset configuration.
+        
+        Returns:
+            Tuple representing the shape of the input tensor (batch_size, channels, height, width)
+        """
+        batch_size = getattr(self.config.search, "batch_size", 64)
+        
+        if self.config.dataset in ['cifar10', 'cifar100']:
+            return (batch_size, 3, 32, 32)
+        elif self.config.dataset == 'ImageNet16-120':
+            return (batch_size, 3, 16, 16)
+        else:
+            logger.warning(f"Unknown dataset {self.config.dataset}, using default CIFAR shape")
+            return (batch_size, 3, 32, 32)
+    
+    def _collect_shapes(self, graph, dummy_input):
+        """
+        Collect shape information from the graph using ShapeTracker.
+        
+        Args:
+            graph: The graph to collect shape information from
+            dummy_input: Dummy input tensor for forward pass
+            
+        Returns:
+            Dictionary mapping module names to shape information
+        """
+        # Ensure graph is parsed before running forward pass
+        if not graph.is_parsed:
+            graph.parse()
+        
+        # Move graph to the correct device
+        graph = graph.to(self.device)
+        
+        # Use ShapeTracker to collect shape information
+        shape_tracker = ShapeTracker()
+        shape_tracker.register_hooks(graph)
+        
+        # Perform forward pass to collect shape information
+        with torch.no_grad():
+            graph.eval()  # Set to evaluation mode
+            try:
+                _ = graph(dummy_input)
+                logger.info("Forward pass completed successfully")
+            except Exception as e:
+                logger.error(f"Error during forward pass: {e}")
+                raise
+            
+        # Get collected shape information
+        shape_info = shape_tracker.get_shape_info()
+        
+        # Remove hooks to avoid memory leaks
+        shape_tracker.clear_hooks()
+        
+        return shape_info
+    
+    def _save_shape_info(self, shape_info):
+        """
+        Save collected shape information to a JSON file for debugging.
+        
+        Args:
+            shape_info: Dictionary of shape information to save
+        """
+        # Convert tensor shapes to strings for JSON serialization
+        serializable_info = {}
+        for module_name, shapes in shape_info.items():
+            serializable_info[module_name] = {}
+            for k, v in shapes.items():
+                if isinstance(v, tuple):
+                    serializable_info[module_name][k] = str(v)
+                else:
+                    serializable_info[module_name][k] = str(v)
+        
+        # Use current dataset and batch size in filename
+        dataset = self.config.dataset
+        batch_size = self.config.search.batch_size
+
+        # Save to file
+        filename = f"nasbench201_{dataset}_{batch_size}_shape_info.json"
+        with open(filename, "w") as f:
+            json.dump(serializable_info, f, indent=4)
+        
+        logger.info(f"Shape information saved to {filename}")
+    
+    def _attach_shapes_to_graph(self, graph, shape_info):
+        """
+        Attach shape information to the operations in the graph.
         
         Args:
             graph: The graph to annotate
-            shape_info: Dictionary with shape information from the tracker
+            shape_info: Dictionary mapping module names to shape information
         """
-        # First, organize shape_info by edge and primitive for easier lookup
-        edge_primitives_map = {}
-        for key, shapes in shape_info.items():
-            edge_match = re.search(r'makrograph-edge\((\d+),(\d+)\)\.cell-edge\((\d+),(\d+)\)\.primitive-(\d+)', key)
-            if edge_match:
-                makro_from, makro_to, cell_from, cell_to, primitive_idx = map(int, edge_match.groups())
-                edge_key = (makro_from, makro_to, cell_from, cell_to)
-                primitive_key = int(primitive_idx)
-                
-                if edge_key not in edge_primitives_map:
-                    edge_primitives_map[edge_key] = {}
-                    
-                if primitive_key not in edge_primitives_map[edge_key]:
-                    edge_primitives_map[edge_key][primitive_key] = {}
-                
-                # Check if this is for an operation within the primitive
-                op_match = re.search(r'\.op\.(\d+)$', key)
-                if op_match:
-                    op_idx = int(op_match.group(1))
-                    if 'ops' not in edge_primitives_map[edge_key][primitive_key]:
-                        edge_primitives_map[edge_key][primitive_key]['ops'] = {}
-                    edge_primitives_map[edge_key][primitive_key]['ops'][op_idx] = shapes
-                else:
-                    # This is for the primitive itself
-                    edge_primitives_map[edge_key][primitive_key]['self'] = shapes
+        logger.info("Attaching shape information to graph operations")
         
-        # Now annotate all edges in the graph
-        def update_edge(edge):
-            """Update function for each edge"""
-            head, tail = edge.head, edge.tail
+        # Process main graph
+        self._process_edges(graph, "", shape_info)
+        
+        return graph
+    
+    def _process_edges(self, graph, prefix, shape_info):
+        """
+        Process all edges in a graph and attach shape information to operations.
+        
+        Args:
+            graph: The graph to process
+            prefix: Module name prefix for this graph
+            shape_info: Dictionary mapping module names to shape information
+        """
+        graph_name = graph.name if not prefix else f"{prefix}.{graph.name}"
+        
+        # Process all edges in the graph
+        edge_count = 0
+        for u, v, edge_data in graph.edges.data():
+            edge_prefix = f"{graph_name}-edge({u},{v})"
             
-            # For direct edge operations (like those in the makrograph)
-            if hasattr(edge.data.op, 'seq'):
-                for i, layer in enumerate(edge.data.op.seq):
-                    seq_key = f"makrograph-edge({head},{tail}).seq.{i}"
-                    if seq_key in shape_info:
+            # Recursively process operation at this edge
+            if hasattr(edge_data, "op") and edge_data.op is not None:
+                self._process_op(edge_data.op, edge_prefix, shape_info)
+                edge_count += 1
+        
+        logger.info(f"Processed {edge_count} edges in graph {graph_name}")
+    
+    def _process_op(self, op, prefix, shape_info):
+        """
+        Process an operation to attach shape information.
+        
+        Args:
+            op: The operation to process
+            prefix: Module name prefix for this operation
+            shape_info: Dictionary mapping module names to shape information
+        """
+        # Check if the operation is a Graph (subgraph)
+        if isinstance(op, torch.nn.Module) and hasattr(op, "name") and hasattr(op, "edges"):
+            logger.debug(f"Processing subgraph at {prefix}")
+            self._process_edges(op, prefix, shape_info)
+            return
+        
+        # Handle operations with primitives (MixedOp, GSparseMixedOp)
+        if hasattr(op, "primitives"):
+            logger.debug(f"Processing mixed op with {len(op.primitives)} primitives at {prefix}")
+            
+            # Process each primitive
+            for i, primitive in enumerate(op.primitives):
+                prim_prefix = f"{prefix}.primitive-{i}"
+                
+                # Attach shapes to the primitive itself
+                if prim_prefix in shape_info:
+                    if not hasattr(primitive, 'shapes'):
+                        primitive.shapes = {}
+                    primitive.shapes.update(shape_info[prim_prefix])
+                    logger.debug(f"Attached shape information to {prim_prefix}")
+                
+                # Process submodules within the primitive
+                self._process_primitive(primitive, prim_prefix, shape_info)
+                
+        elif prefix in shape_info:
+            # Direct shape information for this op
+            if not hasattr(op, 'shapes'):
+                op.shapes = {}
+            op.shapes.update(shape_info[prefix])
+            logger.debug(f"Attached shape information to {prefix}")
+    
+    def _process_primitive(self, primitive, prefix, shape_info):
+        """
+        Process a primitive and its submodules to attach shape information.
+        
+        Args:
+            primitive: The primitive to process
+            prefix: Module name prefix for this primitive
+            shape_info: Dictionary mapping module names to shape information
+        """
+        # Handle case where primitive has an op attribute (common in NASLib operations)
+        if hasattr(primitive, "op") and isinstance(primitive.op, torch.nn.Module):
+            op_prefix = f"{prefix}.op"
+            
+            # Handle Sequential operations
+            if isinstance(primitive.op, torch.nn.Sequential):
+                for j, layer in enumerate(primitive.op):
+                    layer_prefix = f"{op_prefix}.{j}"
+                    
+                    # Attach shapes to individual layers
+                    if layer_prefix in shape_info:
                         if not hasattr(layer, 'shapes'):
                             layer.shapes = {}
-                        layer.shapes.update(shape_info[seq_key])
+                        layer.shapes.update(shape_info[layer_prefix])
+                        logger.debug(f"Attached shape information to {layer_prefix}")
             
-            # For operations with primitives (MixedOp)
-            if hasattr(edge.data.op, 'primitives'):
-                # Find the cell nodes
-                cell_nodes = None
-                for key in edge_primitives_map.keys():
-                    makro_from, makro_to, _, _ = key
-                    if makro_from == head and makro_to == tail:
-                        cell_nodes = (key[2], key[3])
-                        break
+            # Handle single operations
+            elif op_prefix in shape_info:
+                if not hasattr(primitive.op, 'shapes'):
+                    primitive.op.shapes = {}
+                primitive.op.shapes.update(shape_info[op_prefix])
+                logger.debug(f"Attached shape information to {op_prefix}")
+        
+        # Process named children (like conv_a, conv_b in ResNetBasicblock)
+        for name, module in primitive.named_children():
+            if name == "op":  # Already processed above
+                continue
                 
-                if cell_nodes:
-                    cell_from, cell_to = cell_nodes
-                    edge_key = (head, tail, cell_from, cell_to)
+            module_prefix = f"{prefix}.{name}"
+            
+            # Attach shapes to this module
+            if module_prefix in shape_info:
+                if not hasattr(module, 'shapes'):
+                    module.shapes = {}
+                module.shapes.update(shape_info[module_prefix])
+                logger.debug(f"Attached shape information to {module_prefix}")
+            
+            # If module is Sequential, process its layers too
+            if isinstance(module, torch.nn.Sequential):
+                for j, layer in enumerate(module):
+                    layer_prefix = f"{module_prefix}.{j}"
                     
-                    # Annotate each primitive
-                    for i, primitive in enumerate(edge.data.op.primitives):
-                        if edge_key in edge_primitives_map and i in edge_primitives_map[edge_key]:
-                            primitive_info = edge_primitives_map[edge_key][i]
-                            
-                            # Annotate the primitive itself
-                            if 'self' in primitive_info:
-                                if not hasattr(primitive, 'shapes'):
-                                    primitive.shapes = {}
-                                primitive.shapes.update(primitive_info['self'])
-                            
-                            # Annotate operations within the primitive
-                            if hasattr(primitive, 'op') and isinstance(primitive.op, torch.nn.Sequential):
-                                if 'ops' in primitive_info:
-                                    for op_idx, op_shapes in primitive_info['ops'].items():
-                                        if op_idx < len(primitive.op):
-                                            if not hasattr(primitive.op[op_idx], 'shapes'):
-                                                primitive.op[op_idx].shapes = {}
-                                            primitive.op[op_idx].shapes.update(op_shapes)
-                                            
-                                            # Also ensure the primitive has input/output shapes
-                                            if not hasattr(primitive, 'shapes'):
-                                                primitive.shapes = {}
-                                            
-                                            # First op's input is primitive's input
-                                            if op_idx == 0 and 'input_shape' in op_shapes and 'input_shape' not in primitive.shapes:
-                                                primitive.shapes['input_shape'] = op_shapes['input_shape']
-                                            
-                                            # Last op's output is primitive's output
-                                            if op_idx == len(primitive.op) - 1 and 'output_shape' in op_shapes:
-                                                primitive.shapes['output_shape'] = op_shapes['output_shape']
-                                
-                            # Special case for avgpool in primitive-4
-                            if hasattr(primitive, 'avgpool'):
-                                avg_key = f"makrograph-edge({head},{tail}).cell-edge({cell_from},{cell_to}).primitive-{i}.avgpool"
-                                if avg_key in shape_info:
-                                    if not hasattr(primitive.avgpool, 'shapes'):
-                                        primitive.avgpool.shapes = {}
-                                    primitive.avgpool.shapes.update(shape_info[avg_key])
-                                    
-                                    # Also ensure the primitive has input/output shapes
-                                    if not hasattr(primitive, 'shapes'):
-                                        primitive.shapes = {}
-                                    if 'input_shape' in shape_info[avg_key]:
-                                        primitive.shapes['input_shape'] = shape_info[avg_key]['input_shape']
-                                    if 'output_shape' in shape_info[avg_key]:
-                                        primitive.shapes['output_shape'] = shape_info[avg_key]['output_shape']
-                
-                # Debug output for verification
-                for i, primitive in enumerate(edge.data.op.primitives):
-                    if hasattr(primitive, 'shapes'):
-                        if 'input_shape' in primitive.shapes and 'output_shape' in primitive.shapes:
-                            print(f"Input shape: {primitive.shapes['input_shape']} - Primitive {i}")
-                            print(f"Output shape: {primitive.shapes['output_shape']} - Primitive {i}")
-                    elif hasattr(primitive, 'op') and isinstance(primitive.op, torch.nn.Sequential):
-                        # Check each operation inside the primitive
-                        for j, op in enumerate(primitive.op):
-                            if hasattr(op, 'shapes'):
-                                if 'input_shape' in op.shapes and 'output_shape' in op.shapes:
-                                    print(f"Input shape: {op.shapes['input_shape']} - Primitive {i}, Op {j}")
-                                    print(f"Output shape: {op.shapes['output_shape']} - Primitive {i}, Op {j}")
-                            else:
-                                print(f"Primitive {i} operation {j} has no shape information.")
-                    else:
-                        print(f"Primitive {i} has no shape information.")
-                        
-        # Update all edges in the graph
-        graph.update_edges(update_edge, scope="all", private_edge_data=True)
+                    if layer_prefix in shape_info:
+                        if not hasattr(layer, 'shapes'):
+                            layer.shapes = {}
+                        layer.shapes.update(shape_info[layer_prefix])
+                        logger.debug(f"Attached shape information to {layer_prefix}")

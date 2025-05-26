@@ -18,6 +18,7 @@ import naslib.search_spaces.core.primitives as primitives
 from naslib.utils.shape_annotator import ShapeAnnotator
 
 import numpy as np
+from naslib.optimizers.oneshot.gsparsity.operation_zero_cost_proxy_scoring import evaluate_micro_architecture_zcp
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class GSparseOptimizer(MetaOptimizer):
         self.operation_weights = torch.nn.ParameterList()
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
-        )  #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
+        ) 
 
     @staticmethod
     def update_ops(edge):
@@ -402,6 +403,8 @@ class GSparseOptimizer(MetaOptimizer):
             For operations (not suboperations) like Identity() etc. that do not have weights,
             the weights attached to them are used.
             """
+            #! Print edges
+            # print(f"Edge: {edge}")
             if edge.data.has("alpha"):
                 weight = 0.0
                 group_dim = torch.zeros(1)
@@ -417,6 +420,22 @@ class GSparseOptimizer(MetaOptimizer):
                                     logger.info(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
                                 else:
                                     logger.info(f"Primitive {i} operation {j} has no shape information.")
+                                
+                                zcp_score = evaluate_micro_architecture_zcp(
+                                operation=edge.data.op.primitives[i].op[j],
+                                operation_input_dimensions=edge.data.op.primitives[i].op[j].shapes['input_shape'],
+                                operation_output_dimensions=edge.data.op.primitives[i].op[j].shapes['output_shape'], 
+                                dataloader=self.zcp_dataloader, 
+                                zc_method=self.zcp_method,
+                                dataset=self.dataset
+                                )
+                                logger.info(f"Primitive {i} operation {j} ZCP: {zcp_score}")
+                                weight += (
+                                    torch.norm(
+                                        edge.data.op.primitives[i].op[j].weight, 2
+                                    )
+                                    ** 2
+                                ).item() * zcp_score
                                 weight += (
                                     torch.norm(
                                         edge.data.op.primitives[i].op[j].weight, 2
@@ -458,9 +477,19 @@ class GSparseOptimizer(MetaOptimizer):
                             logger.info(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
                         else:
                             logger.info(f"Primitive {i} has no shape information.")
+
+                        zcp_score = evaluate_micro_architecture_zcp(
+                        operation=edge.data.op.primitives[i], 
+                        operation_input_dimensions=edge.data.op.primitives[i].shapes['input_shape'],
+                        operation_output_dimensions=edge.data.op.primitives[i].shapes['output_shape'],
+                        dataloader=self.zcp_dataloader, 
+                        zc_method=self.zcp_method,
+                        dataset=self.dataset
+                        )
+                        logger.info(f"Primitive {i} ZCP: {zcp_score}")
                         edge.data.weights[i] += (
-                            edge.data.op.primitives[i].weight.item()
-                        ) ** 2
+                        edge.data.op.primitives[i].weight.item()
+                        ) ** 2 * zcp_score
                         edge.data.dimension[i] += size
 
         def normalize_weights(edge):

@@ -3,56 +3,15 @@ import logging
 import json
 import os
 from typing import Dict, Any
+import torch.nn as nn
 
 from .shape_tracker import ShapeTracker
+from ..search_spaces.core import primitives as ops # For isinstance checks
+from ..search_spaces.core.graph import Graph as CoreGraph # Import CoreGraph
+
+logging.basicConfig(level=logging.DEBUG) # Or configure specific loggers
 
 logger = logging.getLogger(__name__)
-
-
-#It looks relative good. Primitive 4 is still missing. 
-# Also it seems to do [05/23 12:54:20 nl.utils.shape_annotator]: Attaching shape information to graph operations
-# [05/23 12:54:20 nl.utils.shape_annotator]: Processed 6 edges in graph makrograph-edge(2,3).cell
-
-# and thus misses makrograph-edge(1,2)
-
-# {
-#     "makrograph-edge(1,2).seq.0": {
-#         "input_shape": "(torch.Size([64, 3, 32, 32]),)",
-#         "output_shape": "torch.Size([64, 16, 32, 32])"
-#     },
-#     "makrograph-edge(1,2).seq.1": {
-#         "input_shape": "(torch.Size([64, 16, 32, 32]),)",
-#         "output_shape": "torch.Size([64, 16, 32, 32])"
-#     },
-#     "makrograph-edge(2,3).cell-edge(1,2).primitive-0": {
-#         "input_shape": "(torch.Size([64, 16, 32, 32]), None)",
-#         "output_shape": "torch.Size([64, 16, 32, 32])"
-#     },
-
-# The same happens for makrograph-edge(19,20)
-
-#     "makrograph-edge(19,20).op.0": {
-#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
-#         "output_shape": "torch.Size([64, 64, 8, 8])"
-#     },
-#     "makrograph-edge(19,20).op.1": {
-#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
-#         "output_shape": "torch.Size([64, 64, 8, 8])"
-#     },
-#     "makrograph-edge(19,20).op.2": {
-#         "input_shape": "(torch.Size([64, 64, 8, 8]),)",
-#         "output_shape": "torch.Size([64, 64, 1, 1])"
-#     },
-#     "makrograph-edge(19,20).op.3": {
-#         "input_shape": "(torch.Size([64, 64, 1, 1]),)",
-#         "output_shape": "torch.Size([64, 64])"
-#     },
-#     "makrograph-edge(19,20).op.4": {
-#         "input_shape": "(torch.Size([64, 64]),)",
-#         "output_shape": "torch.Size([64, 10])"
-#     }
-# }
-
 
 class ShapeAnnotator:
     """
@@ -152,6 +111,9 @@ class ShapeAnnotator:
         # Remove hooks to avoid memory leaks
         shape_tracker.clear_hooks()
         
+        # Log summary of collected shape info
+        logger.info(f"Collected shape information for {len(shape_info)} modules")
+        
         return shape_info
     
     def _save_shape_info(self, shape_info):
@@ -191,128 +153,208 @@ class ShapeAnnotator:
             shape_info: Dictionary mapping module names to shape information
         """
         logger.info("Attaching shape information to graph operations")
+        logger.debug(f"Sample keys from shape_info: {list(shape_info.keys())[:20]}") # ADD THIS LINE
         
-        # Process main graph
-        self._process_edges(graph, "", shape_info)
+        processed_keys = set()
+        
+        # Process the main graph (makrograph)
+        # The initial prefix for modules directly under the main graph (e.g., ops on its edges)
+        # will be constructed inside _process_main_graph_edges.
+        self._process_main_graph_edges(graph, graph.name, shape_info, processed_keys)
+        
+        unprocessed_keys = set(shape_info.keys()) - processed_keys
+        if unprocessed_keys:
+            logger.warning(f"Found {len(unprocessed_keys)} unprocessed shape entries after annotation.")
+            if unprocessed_keys: # Log a few examples if any exist
+                logger.debug(f"Examples of unprocessed keys: {sorted(list(unprocessed_keys))[:10]}...")
+        else:
+            logger.info("All shape entries processed and attached to the graph.")
         
         return graph
-    
-    def _process_edges(self, graph, prefix, shape_info):
+
+    def _process_module_recursive(self, module_obj, current_module_key, shape_info, processed_keys):
         """
-        Process all edges in a graph and attach shape information to operations.
-        
+        Recursively process a module and its children to attach shape information.
+
         Args:
-            graph: The graph to process
-            prefix: Module name prefix for this graph
-            shape_info: Dictionary mapping module names to shape information
+            module_obj: The nn.Module instance.
+            current_module_key: The key that ShapeTracker would use for this module_obj in shape_info.
+            shape_info: Dictionary mapping module names to shape information.
+            processed_keys: Set to track processed keys.
         """
-        graph_name = graph.name if not prefix else f"{prefix}.{graph.name}"
+        is_leaf_node = not list(module_obj.children())
+        is_in_shape_info = current_module_key in shape_info
         
-        # Process all edges in the graph
-        edge_count = 0
+        logger.debug(f"Processing module with key: '{current_module_key}'. Is leaf: {is_leaf_node}. Present in shape_info: {is_in_shape_info}")
+
+        if is_leaf_node and is_in_shape_info:
+            if not hasattr(module_obj, 'shapes'):
+                module_obj.shapes = {}
+            module_obj.shapes.update(shape_info[current_module_key])
+            processed_keys.add(current_module_key)
+            logger.debug(f"SUCCESS: Attached shape information to leaf module: {current_module_key} with shapes {shape_info[current_module_key]}")
+            return 
+        elif is_leaf_node and not is_in_shape_info:
+            logger.warning(f"LEAF MODULE MISMATCH: Leaf module key '{current_module_key}' not found in shape_info keys.")
+
+        for child_name, child_sub_module in module_obj.named_children():
+            child_module_key = f"{current_module_key}.{child_name}"
+            self._process_module_recursive(child_sub_module, child_module_key, shape_info, processed_keys)
+
+    def _process_main_graph_edges(self, graph, graph_base_name, shape_info, processed_keys):
+        """
+        Process the edges of the main graph.
+        Args:
+            graph: The main graph (e.g., NasBench201SearchSpace instance).
+            graph_base_name: The base name for this graph (e.g., "makrograph").
+            shape_info: Dictionary mapping module names to shape information.
+            processed_keys: Set to track processed keys.
+        """
+        logger.info(f"Processing main graph: {graph.name} (base name: {graph_base_name})")
+        processed_cells_count = 0
+        processed_fixed_modules_count = 0
+
         for u, v, edge_data in graph.edges.data():
-            edge_prefix = f"{graph_name}-edge({u},{v})"
-            
-            # Recursively process operation at this edge
+            edge_op_base_key = f"{graph_base_name}-edge({u},{v})" # Key for the op on this edge or prefix for its children
+
             if hasattr(edge_data, "op") and edge_data.op is not None:
-                self._process_op(edge_data.op, edge_prefix, shape_info)
+                op_module_instance = edge_data.op
+
+                if hasattr(op_module_instance, "edges") and hasattr(op_module_instance, "name") and \
+                   isinstance(op_module_instance, CoreGraph) and not isinstance(op_module_instance, ops.MixedOp):
+                    logger.info(f"Processing Cell (op on edge {u},{v}), using base key for its contents: '{edge_op_base_key}'")
+                    self._process_cell_edges(op_module_instance, edge_op_base_key, shape_info, processed_keys)
+                    processed_cells_count += 1
+                
+                elif isinstance(op_module_instance, torch.nn.Module):
+                    logger.info(f"Processing Fixed Module (op on edge {u},{v}), using base key for its contents: '{edge_op_base_key}'")
+                    # The op_module_instance itself might not be a "leaf" in shape_info if it has children.
+                    # _process_module_recursive will handle finding shape_info for its children using edge_op_base_key as prefix.
+                    # If op_module_instance itself was hooked (e.g. a simple nn.Conv2d not in a Sequential), 
+                    # then edge_op_base_key should be its key.
+                    # However, PyTorch names from add_module usually include ".op" for the op on edge.
+                    # The shape_info.json keys like "makrograph-edge(1,2).seq.0" suggest that ShapeTracker
+                    # might not use the ".op" part from the PyTorch module name of the edge's op itself
+                    # when forming the prefix for the children of that op.
+                    # So, edge_op_base_key is the prefix for children.
+                    # If the op_module_instance itself (e.g. a custom ResNetBlock) was hooked directly, its key would be edge_op_base_key.
+                    # This seems to be the most consistent interpretation of the shape_info.json keys.
+                    pytorch_module_name_for_op_on_edge = f"{edge_op_base_key}.op" # This is the actual PyTorch module name
+                    
+                    # We need to decide if shape_info keys for children of op_module_instance start with
+                    # edge_op_base_key or pytorch_module_name_for_op_on_edge.
+                    # Given "makrograph-edge(1,2).seq.0", it implies children of Stem (on edge 1,2)
+                    # are named relative to "makrograph-edge(1,2)", not "makrograph-edge(1,2).op".
+                    self._process_module_recursive(op_module_instance, edge_op_base_key, shape_info, processed_keys)
+                    processed_fixed_modules_count +=1
+        
+        logger.info(f"Processed {processed_cells_count} cell(s) and {processed_fixed_modules_count} fixed module(s) on the main graph '{graph.name}'.")
+
+
+    def _process_cell_edges(self, cell_graph, cell_graph_base_key, shape_info, processed_keys):
+        """
+        Process all edges within a cell graph.
+        Args:
+            cell_graph: The cell Graph instance.
+            cell_graph_base_key: The base key for this cell graph's contents (e.g., "makrograph-edge(2,3)").
+            shape_info: Dictionary mapping module names to shape information.
+            processed_keys: Set to track processed keys.
+        """
+        edge_count = 0
+        for u, v, edge_data in cell_graph.edges.data():
+            cell_edge_op_base_key = f"{cell_graph_base_key}.cell-edge({u},{v})" # Key for op on this cell edge or prefix for its children
+            
+            if hasattr(edge_data, "op") and edge_data.op is not None:
+                op_on_cell_edge_instance = edge_data.op
+
+                if isinstance(op_on_cell_edge_instance, ops.MixedOp):
+                    logger.debug(f"Processing MixedOp in cell '{cell_graph.name}' on edge ({u},{v}), using base key for its primitives: '{cell_edge_op_base_key}'")
+                    self._process_mixed_op(op_on_cell_edge_instance, cell_edge_op_base_key, shape_info, processed_keys)
+                elif isinstance(op_on_cell_edge_instance, torch.nn.Module):
+                    # This handles cases where a specific primitive is already chosen.
+                    # Similar to fixed modules on main graph, use cell_edge_op_base_key as prefix for its children.
+                    logger.debug(f"Processing direct nn.Module in cell '{cell_graph.name}' on edge ({u},{v}), using base key for its contents: '{cell_edge_op_base_key}'")
+                    self._process_module_recursive(op_on_cell_edge_instance, cell_edge_op_base_key, shape_info, processed_keys)
                 edge_count += 1
         
-        logger.info(f"Processed {edge_count} edges in graph {graph_name}")
-    
-    def _process_op(self, op, prefix, shape_info):
+        logger.info(f"Processed {edge_count} edges in cell graph '{cell_graph.name}' (base key '{cell_graph_base_key}')")
+
+    def _process_mixed_op(self, mixed_op_instance, mixed_op_base_key, shape_info, processed_keys):
         """
-        Process an operation to attach shape information.
-        
+        Process a MixedOp and its primitives.
         Args:
-            op: The operation to process
-            prefix: Module name prefix for this operation
-            shape_info: Dictionary mapping module names to shape information
+            mixed_op_instance: The MixedOp nn.Module instance.
+            mixed_op_base_key: The base key for this MixedOp's primitives (e.g., "makrograph-edge(2,3).cell-edge(1,2)").
+            shape_info: Dictionary mapping module names to shape information.
+            processed_keys: Set to track processed keys.
         """
-        # Check if the operation is a Graph (subgraph)
-        if isinstance(op, torch.nn.Module) and hasattr(op, "name") and hasattr(op, "edges"):
-            logger.debug(f"Processing subgraph at {prefix}")
-            self._process_edges(op, prefix, shape_info)
+        if not hasattr(mixed_op_instance, "primitives") or not isinstance(mixed_op_instance.primitives, list):
+            logger.warning(f"MixedOp with base key {mixed_op_base_key} has no 'primitives' list or it's not a list.")
             return
-        
-        # Handle operations with primitives (MixedOp, GSparseMixedOp)
-        if hasattr(op, "primitives"):
-            logger.debug(f"Processing mixed op with {len(op.primitives)} primitives at {prefix}")
             
-            # Process each primitive
-            for i, primitive in enumerate(op.primitives):
-                prim_prefix = f"{prefix}.primitive-{i}"
-                
-                # Attach shapes to the primitive itself
-                if prim_prefix in shape_info:
-                    if not hasattr(primitive, 'shapes'):
-                        primitive.shapes = {}
-                    primitive.shapes.update(shape_info[prim_prefix])
-                    logger.debug(f"Attached shape information to {prim_prefix}")
-                
-                # Process submodules within the primitive
-                self._process_primitive(primitive, prim_prefix, shape_info)
-                
-        elif prefix in shape_info:
-            # Direct shape information for this op
-            if not hasattr(op, 'shapes'):
-                op.shapes = {}
-            op.shapes.update(shape_info[prefix])
-            logger.debug(f"Attached shape information to {prefix}")
-    
-    def _process_primitive(self, primitive, prefix, shape_info):
-        """
-        Process a primitive and its submodules to attach shape information.
-        
-        Args:
-            primitive: The primitive to process
-            prefix: Module name prefix for this primitive
-            shape_info: Dictionary mapping module names to shape information
-        """
-        # Handle case where primitive has an op attribute (common in NASLib operations)
-        if hasattr(primitive, "op") and isinstance(primitive.op, torch.nn.Module):
-            op_prefix = f"{prefix}.op"
+        for i, primitive_module_instance in enumerate(mixed_op_instance.primitives):
+            primitive_base_key = f"{mixed_op_base_key}.primitive-{i}" # Key for this primitive or prefix for its children
             
-            # Handle Sequential operations
-            if isinstance(primitive.op, torch.nn.Sequential):
-                for j, layer in enumerate(primitive.op):
-                    layer_prefix = f"{op_prefix}.{j}"
-                    
-                    # Attach shapes to individual layers
-                    if layer_prefix in shape_info:
-                        if not hasattr(layer, 'shapes'):
-                            layer.shapes = {}
-                        layer.shapes.update(shape_info[layer_prefix])
-                        logger.debug(f"Attached shape information to {layer_prefix}")
-            
-            # Handle single operations
-            elif op_prefix in shape_info:
-                if not hasattr(primitive.op, 'shapes'):
-                    primitive.op.shapes = {}
-                primitive.op.shapes.update(shape_info[op_prefix])
-                logger.debug(f"Attached shape information to {op_prefix}")
-        
-        # Process named children (like conv_a, conv_b in ResNetBasicblock)
-        for name, module in primitive.named_children():
-            if name == "op":  # Already processed above
+            if not isinstance(primitive_module_instance, torch.nn.Module):
+                logger.warning(f"Primitive at index {i} with base key {primitive_base_key} is not an nn.Module. Skipping.")
                 continue
-                
-            module_prefix = f"{prefix}.{name}"
-            
-            # Attach shapes to this module
-            if module_prefix in shape_info:
-                if not hasattr(module, 'shapes'):
-                    module.shapes = {}
-                module.shapes.update(shape_info[module_prefix])
-                logger.debug(f"Attached shape information to {module_prefix}")
-            
-            # If module is Sequential, process its layers too
-            if isinstance(module, torch.nn.Sequential):
-                for j, layer in enumerate(module):
-                    layer_prefix = f"{module_prefix}.{j}"
+
+            # Initialize shapes on the primitive itself, ensuring the attribute exists.
+            if not hasattr(primitive_module_instance, 'shapes'):
+                primitive_module_instance.shapes = {}
+
+            # Recursively process the primitive and its children.
+            # This will attach shapes to any nn.Module components, including potentially
+            # primitive_module_instance itself if primitive_base_key is in shape_info,
+            # or its named children (e.g., primitive_module_instance.avgpool).
+            self._process_module_recursive(primitive_module_instance, primitive_base_key, shape_info, processed_keys)
+
+            # After recursion, check if the primitive_module_instance itself has its shapes.
+            # If not, attempt to infer them from its constituent child modules.
+            has_input_shape = 'input_shape' in primitive_module_instance.shapes
+            has_output_shape = 'output_shape' in primitive_module_instance.shapes
+
+            if not (has_input_shape and has_output_shape):
+                logger.debug(f"Primitive {primitive_base_key} ({type(primitive_module_instance).__name__}) may lack direct shapes. Attempting to infer from children.")
+
+                # Specific handling for ops.AvgPool1x1
+                if isinstance(primitive_module_instance, ops.AvgPool1x1):
+                    # Determine the child providing input and the child providing final output
+                    input_child = primitive_module_instance.avgpool
+                    output_child = primitive_module_instance.bn if hasattr(primitive_module_instance, 'bn') and primitive_module_instance.bn is not None else primitive_module_instance.avgpool
                     
-                    if layer_prefix in shape_info:
-                        if not hasattr(layer, 'shapes'):
-                            layer.shapes = {}
-                        layer.shapes.update(shape_info[layer_prefix])
-                        logger.debug(f"Attached shape information to {layer_prefix}")
+                    if not has_input_shape and hasattr(input_child, 'shapes') and 'input_shape' in input_child.shapes:
+                        primitive_module_instance.shapes['input_shape'] = input_child.shapes['input_shape']
+                        logger.debug(f"Inferred input_shape for {primitive_base_key} from child {type(input_child).__name__}.")
+                    
+                    if not has_output_shape and hasattr(output_child, 'shapes') and 'output_shape' in output_child.shapes:
+                        primitive_module_instance.shapes['output_shape'] = output_child.shapes['output_shape']
+                        logger.debug(f"Inferred output_shape for {primitive_base_key} from child {type(output_child).__name__}.")
+
+                # Specific handling for ops.ReLUConvBN (as a fallback, though it usually gets direct shapes)
+                elif isinstance(primitive_module_instance, ops.ReLUConvBN):
+                    if hasattr(primitive_module_instance, 'op') and isinstance(primitive_module_instance.op, nn.Sequential) and len(primitive_module_instance.op) > 0:
+                        first_component = primitive_module_instance.op[0]
+                        last_component = primitive_module_instance.op[-1]
+
+                        if not has_input_shape and hasattr(first_component, 'shapes') and 'input_shape' in first_component.shapes:
+                             primitive_module_instance.shapes['input_shape'] = first_component.shapes['input_shape']
+                             logger.debug(f"Inferred input_shape for {primitive_base_key} from its first op component.")
+                        if not has_output_shape and hasattr(last_component, 'shapes') and 'output_shape' in last_component.shapes:
+                             primitive_module_instance.shapes['output_shape'] = last_component.shapes['output_shape']
+                             logger.debug(f"Inferred output_shape for {primitive_base_key} from its last op component.")
+                
+                elif isinstance(primitive_module_instance, (ops.Identity, ops.Zero)):
+                    # For Identity and Zero, if they don't have direct shapes, it's harder to infer
+                    # without knowing the input shape from the graph flow.
+                    # The optimizer might need to handle this by assuming output_shape = input_shape.
+                    if not (has_input_shape and has_output_shape):
+                        logger.debug(f"Primitive {primitive_base_key} ({type(primitive_module_instance).__name__}) is Identity/Zero and still missing direct shapes. Input shape might need to be propagated by optimizer if not found.")
+
+
+            # Final check for logging, to be seen by the optimizer's context
+            if not primitive_module_instance.shapes.get('output_shape') or not primitive_module_instance.shapes.get('input_shape'):
+                # This warning is important for the optimizer if shapes are still missing.
+                pass # The optimizer itself will log "Primitive X has no shape information."
+            else:
+                logger.debug(f"Shapes for {primitive_base_key} ({type(primitive_module_instance).__name__}): IN={primitive_module_instance.shapes.get('input_shape')}, OUT={primitive_module_instance.shapes.get('output_shape')}")

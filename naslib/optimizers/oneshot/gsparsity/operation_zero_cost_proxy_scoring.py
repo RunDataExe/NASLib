@@ -3,275 +3,292 @@ import torch.nn as nn
 import torch.nn.functional as F
 from naslib.predictors import ZeroCost
 import logging
-from typing import Union, Tuple # Add this import
-from naslib.search_spaces.core.primitives import AbstractPrimitive, Identity, Zero, ReLUConvBN, AvgPool1x1
-from naslib.search_spaces.nasbench201.primitives import ResNetBasicblock
+import math # Ensure math is imported for isnan/isinf if used by ZeroCost or its callees
+from naslib.search_spaces.core.primitives import AbstractPrimitive # Add this import
+
 logger = logging.getLogger(__name__)
 
 
-#! Start over again. Only procced when task at hand is correctly implemented
-
-#! 1) infer the input dimension of the first operation
-#! 2) infer the output dimension of the last operation
-#! 3) Adapt input Data to the dimension of the input operation
-#! 4) Adapt output dimension of the last operation to the input dimensionality of the fixed, minimaly gradient influencing, classifier
-#! 5) Apply ZCP to the new synthetic architecture 
-
-
-def adapt_channels(x, target_channels):
-    """Adapt tensor channels to target dimension"""
+# def adapt_channels(x, target_channels):
+#     """Adapt tensor channels to target dimension (simple slice or pad)."""
+#     current_channels = x.shape[1]
     
-    logger.info(f"Adapting channels: input_shape={x.shape}, target_channels={target_channels}")
+#     if current_channels == target_channels:
+#         return x
+        
+#     if current_channels < target_channels:
+#         padding_shape = list(x.shape)
+#         padding_shape[1] = target_channels - current_channels
+#         padding = torch.zeros(padding_shape, device=x.device, dtype=x.dtype)
+#         x = torch.cat([x, padding], dim=1)
+#     elif current_channels > target_channels:
+#         x = x[:, :target_channels]
     
-    current_channels = x.shape[1]
-    
-    if current_channels < target_channels:
-        padding = torch.zeros(x.shape[0], target_channels - current_channels, 
-                             *x.shape[2:], device=x.device)
-        x = torch.cat([x, padding], dim=1)
-    elif current_channels > target_channels:
-        x = x[:, :target_channels]
-    
-    # After adaptation
-    logger.info(f"After adaptation: output_shape={x.shape}")
-    
-    return x
+#     # logger.debug(f"Adapting channels (simple): input_shape[1]={current_channels}, target_channels={target_channels}, output_shape[1]={x.shape[1]}")
+#     return x
 
 def adapt_spatial(x, target_h, target_w):
-    """Adapt tensor spatial dimensions to target"""
-        
-    h, w = x.shape[-2:]
+    """Adapt tensor spatial dimensions to target using center padding or center cropping."""
+    _, _, h, w = x.shape
     
+    if h == target_h and w == target_w:
+        return x
+
+    # Padding if current dimensions are smaller (center padding)
     if h < target_h or w < target_w:
-        pad_h = max(0, target_h - h)
-        pad_w = max(0, target_w - w)
-        padding = (pad_w//2, pad_w-pad_w//2, pad_h//2, pad_h-pad_h//2)
-        x = F.pad(x, padding)
-    
-    if h > target_h or w > target_w:
+        pad_h_total = max(0, target_h - h)
+        pad_w_total = max(0, target_w - w)
+        
+        pad_top = pad_h_total // 2
+        pad_bottom = pad_h_total - pad_top # Handles odd padding
+        pad_left = pad_w_total // 2
+        pad_right = pad_w_total - pad_left # Handles odd padding
+        
+        x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
+        # Update current dimensions after padding
+        # _, _, h, w = x.shape # Not needed as x is returned
+
+    # Cropping if current dimensions are larger (center cropping)
+    elif h > target_h or w > target_w: # Use elif to avoid re-evaluating if padding occurred and met criteria
         start_h = (h - target_h) // 2
+        end_h = start_h + target_h
         start_w = (w - target_w) // 2
-        x = x[:, :, start_h:start_h+target_h, start_w:start_w+target_w]
-    
+        end_w = start_w + target_w
+        x = x[:, :, start_h:end_h, start_w:end_w]
+        
+    # logger.debug(f"Adapting spatial: input_hw=({h_orig},{w_orig}), target_hw=({target_h},{target_w}), output_hw=({x.shape[-2]},{x.shape[-1]})")
     return x
 
-
-
-
-
-# TODO find out how stage can be infered or if I should use try/except
-
-# TODO go through each primitive and verify it
-# TODO Conv2d and verify if it
-
-
-
-
-
-def get_primitive_in_out_channels(primitive: AbstractPrimitive, stage_C: int = None):
+def adapt_channels_fairly(x, target_channels):
     """
-    Determines the input and output channel dimensionality of a given NASLib primitive.
-
-    Args:
-        primitive (AbstractPrimitive): The NASLib primitive instance.
-        stage_C (int, optional): The number of channels for the current stage/cell.
-            Required for primitives like Identity, Zero(stride=1), and AvgPool1x1(stride=1)
-            as used in NASBench-201 cells, where channel count is implicit from the stage.
-
-    Returns:
-        tuple(int | None, int | None): A tuple (in_channels, out_channels).
-                                       Returns (None, None) if dimensionality cannot be determined.
+    Adapt tensor channels to target dimension.
+    If downsampling, selects channels evenly using linspace.
+    If upsampling, places original channels evenly within a zero-initialized target tensor.
+    Assumes x is [B, C, H, W].
     """
+    current_channels = x.shape[1]
+
+    if current_channels == target_channels:
+        return x
     
-    import pudb
-    pudb.set_trace()
-    if not isinstance(primitive, AbstractPrimitive):
-        raise TypeError(f"Expected an AbstractPrimitive, got {type(primitive)}")
-    
+    if target_channels == 0: 
+        return torch.zeros(x.shape[0], 0, x.shape[2], x.shape[3], device=x.device, dtype=x.dtype)
 
-    # check if each has it 
-    init_params = primitive.init_params
+    if current_channels == 0: 
+        return torch.zeros(x.shape[0], target_channels, x.shape[2], x.shape[3], device=x.device, dtype=x.dtype)
 
+    if current_channels < target_channels: # Upsampling
+        output_tensor = torch.zeros(x.shape[0], target_channels, x.shape[2], x.shape[3], device=x.device, dtype=x.dtype)
+        
+        if current_channels > 0:
+            # Generate target indices in the output tensor where input channels will be placed.
+            idx_to_place_at_in_output = torch.round(torch.linspace(0, target_channels - 1, steps=current_channels, device=x.device)).long()
+            unique_idx_to_place_at_in_output = torch.unique(idx_to_place_at_in_output)
 
-
-    if isinstance(primitive, Identity):
-        # Identity preserves channels. For NASBench-201 cell ops, it relies on stage_C.
-        if stage_C is not None:
-            return stage_C, stage_C
-        else:
-            # If C_in/C_out are somehow in init_params for a generic Identity (not typical for NB201 cell ops)
-            c_in = init_params.get('C_in')
-            c_out = init_params.get('C_out')
-            if c_in is not None and c_out is not None:
-                return c_in, c_out
-            print(f"Warning: stage_C not provided for Identity primitive {primitive}. Cannot determine channels directly from init_params {init_params}.")
-            return None, None
-
-    elif isinstance(primitive, Zero):
-        stride = init_params.get('stride')
-        c_in = init_params.get('C_in')
-        c_out = init_params.get('C_out')
-
-        if stride == 1:
-            # Zero(stride=1) in NASBench-201 cells preserves channels, relying on stage_C.
-            if c_in is not None and c_out is not None: # If explicitly defined
-                 return c_in, c_out
-            if stage_C is not None:
-                return stage_C, stage_C
+            if len(unique_idx_to_place_at_in_output) < current_channels:
+                # Not enough unique slots to place all input channels "fairly" and uniquely.
+                # We will place the first len(unique_idx_to_place_at_in_output) input channels
+                # into these available unique slots.
+                logger.warning(f"Fair upsampling: Not enough unique target slots ({len(unique_idx_to_place_at_in_output)}) for all {current_channels} input channels when target is {target_channels}. "
+                               f"Placing first {len(unique_idx_to_place_at_in_output)} input channels into available unique slots.")
+                output_tensor.index_copy_(1, unique_idx_to_place_at_in_output, x[:, :len(unique_idx_to_place_at_in_output), :, :])
             else:
-                print(f"Warning: stage_C not provided for Zero(stride=1) primitive {primitive} and C_in/C_out not in init_params {init_params}. Cannot determine channels.")
-                return None, None
-        else:
-            # For Zero with stride > 1, C_in and C_out might be specified
-            # (e.g., if it's also handling channel changes per NASLib's Zero op definition)
-            if c_in is not None and c_out is not None:
-                return c_in, c_out
-            # If C_out is missing, it's ambiguous for a channel-changing Zero op without more rules.
-            # NASLib's Zero op can infer C_out based on C_in and stride if C_in == C_out is not met,
-            # but that logic is in its forward pass, not trivially in init_params alone if C_out is absent.
-            print(f"Warning: Zero(stride={stride}) with init_params {init_params} and no stage_C. Channel determination might be incomplete.")
-            return c_in, c_out # Returns what's available
+                # Enough unique slots. Place all 'current_channels' from x into the first 'current_channels' unique target slots.
+                output_tensor.index_copy_(1, unique_idx_to_place_at_in_output[:current_channels], x)
+        
+        # logger.debug(f"Fairly adapting channels (upsampling - placement): input_C={current_channels}, target_C={target_channels}, output_C={output_tensor.shape[1]}")
+        return output_tensor
 
-    elif isinstance(primitive, AvgPool1x1):
-        # For NASBench-201 cell ops, AvgPool1x1 has stride=1 and no C_in/C_out in init_params.
-        stride = init_params.get('stride')
-        if stride == 1:
-            if stage_C is not None:
-                return stage_C, stage_C
-            else:
-                # Check if C_in/C_out are in init_params (not for NB201 cell version)
-                c_in = init_params.get('C_in')
-                c_out = init_params.get('C_out')
-                if c_in is not None and c_out is not None:
-                    return c_in, c_out
-                print(f"Warning: stage_C not provided for AvgPool1x1(stride=1) primitive {primitive}. Cannot determine channels from init_params {init_params}.")
-                return None, None
-        else:
-            # AvgPool1x1 with stride > 1 should have C_in, C_out in init_params
-            # as per naslib/search_spaces/core/primitives.py
-            c_in = init_params.get('C_in')
-            c_out = init_params.get('C_out')
-            if c_in is not None and c_out is not None:
-                return c_in, c_out
-            else:
-                print(f"Warning: AvgPool1x1(stride={stride}) missing C_in/C_out in init_params {init_params}. Cannot determine channels.")
-                return None, None
-    
-    elif isinstance(primitive, ReLUConvBN):
-        # is this even called?
-        # if yes is the conv in it changing the channels?
-        return init_params.get('C_in'), init_params.get('C_out')
-
-    elif isinstance(primitive, ResNetBasicblock):
-        # is this even called?
-        # if yes is the conv in it changing the channels?
-        return init_params.get('C_in'), init_params.get('C_out')
-
-    # # Fallback for other primitives: try to find C_in, C_out, or C
-    # c_in_generic = init_params.get('C_in')
-    # c_out_generic = init_params.get('C_out')
-    # if c_in_generic is not None and c_out_generic is not None:
-    #     return c_in_generic, c_out_generic
-
-    # # If only 'C' is present (e.g. some primitives might use C_in=C, C_out=C)
-    # c_channel = init_params.get('C')
-    # if c_channel is not None and c_in_generic is None and c_out_generic is None:
-    #     return c_channel, c_channel
-    
-    # if c_in_generic is not None and c_out_generic is None and stage_C is not None and c_in_generic == stage_C:
-    #     # If C_in matches stage_C and C_out is missing, assume C_out is also stage_C for channel-preserving ops
-    #     print(f"Warning: Primitive {type(primitive).__name__} has C_in={c_in_generic} matching stage_C={stage_C} but C_out is missing. Assuming C_out={stage_C}.")
-    #     return stage_C, stage_C
-
-
-    print(f"Warning: Dimensionality for primitive type {type(primitive).__name__} with params {init_params} could not be determined with the current logic. stage_C was {stage_C}.")
-    return None, None
+    else: # Downsampling: current_channels > target_channels
+        # Select target_channels indices evenly spaced from current_channels (source indices from x)
+        selection_indices_from_input = torch.round(torch.linspace(0, current_channels - 1, steps=target_channels, device=x.device)).long()
+        unique_selection_indices_from_input = torch.unique(selection_indices_from_input)
+        
+        x_selected = torch.index_select(x, dim=1, index=unique_selection_indices_from_input)
+        
+        # Post-process to ensure exactly target_channels output
+        if x_selected.shape[1] < target_channels:
+            padding_needed = target_channels - x_selected.shape[1]
+            padding_shape = list(x_selected.shape)
+            padding_shape[1] = padding_needed
+            padding = torch.zeros(padding_shape, device=x.device, dtype=x.dtype)
+            x_selected = torch.cat([x_selected, padding], dim=1) 
+        elif x_selected.shape[1] > target_channels:
+            x_selected = x_selected[:, :target_channels, :, :] 
+            
+        # logger.debug(f"Fairly adapting channels (downsampling - selection): input_C={current_channels}, target_C={target_channels}, output_C={x_selected.shape[1]}")
+        return x_selected
 
 class SyntheticMicroArchitecture(nn.Module):
     """
-    Creates a synthetic neural network for ZCP evaluation by wrapping operation
+    Creates a synthetic neural network for ZCP evaluation by wrapping an operation
     with appropriate input/output handling and a minimal classifier.
+    Uses fixed classifier dimensionality and fair channel adaptation for operation output.
     """
-    def __init__(self, operation, data_input_channels=3, data_input_size=(32, 32), num_classes=10):
+    def __init__(self, operation, operation_input_shape_chw, operation_output_shape_chw, 
+                 num_classes, fixed_intermediate_channel_dim=256): # Removed channel_adaptation_method
         super().__init__()
-        self.operation = operation
-        self.data_input_channels = data_input_channels
-        self.data_input_size = data_input_size
-        self.num_classes = num_classes
-
-        self.operation_input_dimensions, self.operation_output_dimensions = get_primitive_in_out_channels(primitive=self.operation, )
-        # self.operation_output_dimensions = get_operation_output_dimensions(self.operation)
+        self.operation = operation 
         
-        # Simple classifier head
-        self.classifier = nn.Linear(self.operation_output_dimensions[0], num_classes)
+        if not (isinstance(operation_input_shape_chw, tuple) and len(operation_input_shape_chw) == 3):
+            raise ValueError(f"operation_input_shape_chw must be a tuple of (C, H, W), got {operation_input_shape_chw}")
+
+        self.op_input_C, self.op_input_H, self.op_input_W = operation_input_shape_chw
+        self.expected_op_output_C, self.expected_op_output_H, self.expected_op_output_W = operation_output_shape_chw
+        self._num_classes = num_classes
+        self.fixed_intermediate_channel_dim = fixed_intermediate_channel_dim
+
+        self.spatial_reducer = nn.AdaptiveAvgPool2d((1, 1))
+        
+        classifier_in_features = self.fixed_intermediate_channel_dim
+        if classifier_in_features == 0:
+            logger.warning("Fixed intermediate channel dim is 0. Classifier will have 0 input features. Setting to 1 to avoid error.")
+            classifier_in_features = 1 
+
+        self.classifier = nn.Linear(classifier_in_features, self._num_classes)
+        
         with torch.no_grad():
-            # Initialize with small weights to minimize impact on ZCP metrics
             self.classifier.weight.fill_(0.01)
-            self.classifier.bias.fill_(0)
+            if self.classifier.bias is not None:
+                self.classifier.bias.fill_(0)
+
+    def forward(self, x): 
+        # 1. Adapt input to the operation's expected input shape
+        x_adapted_input = adapt_channels_fairly(x, self.op_input_C)
+
+        x_adapted_input = adapt_spatial(x_adapted_input, self.op_input_H, self.op_input_W)
+
+        # 2. Apply the operation
+        if isinstance(self.operation, AbstractPrimitive):
+            op_output = self.operation(x_adapted_input, None)
+        else:
+            op_output = self.operation(x_adapted_input)
+
+        # 3. Spatially reduce the operation's output
+        x_pooled = self.spatial_reducer(op_output)
         
+        # 4. Adapt channels to the fixed_intermediate_channel_dim using the fair method
+        x_channels_adapted = adapt_channels_fairly(x_pooled, self.fixed_intermediate_channel_dim)
 
-    def forward(self, x):
-        x = adapt_channels(x, self.operation_input_dimensions)
-        x = adapt_spatial(x, *self.operation_input_dimensions)
+        # 5. Flatten for the classifier
+        x_flattened = torch.flatten(x_channels_adapted, start_dim=1)
+        
+        if x_flattened.shape[1] != self.classifier.in_features:
+            logger.warning(f"Flattened features {x_flattened.shape[1]} do not match classifier input features {self.classifier.in_features}. Adapting dummy if needed.")
+            if self.classifier.in_features == 1 and x_flattened.shape[1] == 0 : 
+                 x_flattened = torch.zeros(x_flattened.shape[0], 1, device=x_flattened.device, dtype=x_flattened.dtype)
+            elif x_flattened.shape[1] == 0 and self.classifier.in_features > 0: 
+                 x_flattened = torch.zeros(x_flattened.shape[0], self.classifier.in_features, device=x_flattened.device, dtype=x_flattened.dtype)
+            # Consider if a more general reshape or error is needed if other mismatches occur
+            # For now, this handles the zero-channel to classifier_in_features=1 case.
 
-        for op in self.operation:
-            x = op(x)
+        # 6. Classify
+        final_logits = self.classifier(x_flattened)
+        return final_logits
 
-        x = adapt_channels(x, self.operation_output_dimensions)
-        x = adapt_spatial(x, *self.operation_output_dimensions)
+    def get_loss_fn(self): 
+        return nn.CrossEntropyLoss()
 
-        x = self.classifier(x)
+    @property
+    def num_classes(self): # Required by ZeroCost predictor's query method
+        return self._num_classes
 
-def evaluate_micro_architecture_zcp(operation, dataloader, zc_method='jacov', dataset='cifar10'):
+def evaluate_micro_architecture_zcp(operation, operation_input_full_shape, operation_output_full_shape, dataloader, zcp_method='jacov', dataset='cifar10'):
     """
-    Evaluate operation with ZCP by creating a synthetic neural network
+    Evaluate an operation with ZCP by creating a synthetic neural network.
     
     Args:
-        operation: Single operation or list of operation to evaluate
-        dataloader: DataLoader with samples for evaluation
-        zc_method: Zero-cost proxy method to use
-        dataset: Dataset name for dimension inference
+        operation: Single nn.Module (e.g., a primitive operation or a sequence like ConvBNReLU).
+        operation_input_full_shape: Tuple, e.g. (N, C, H, W), or (torch.Size([N,C,H,W]), None), the expected input shape for the operation.
+        operation_output_full_shape: Tuple, e.g. (N, C, H, W), the expected output shape from the operation.
+        dataloader: DataLoader with samples for evaluation.
+        zcp_method: Zero-cost proxy method to use.
+        dataset: Dataset name for dimension inference (primarily for num_classes).
         
     Returns:
-        ZCP score for the synthetic architecture
+        ZCP score for the synthetic architecture.
     """
-    # Set input data dimensions based on dataset
+    # Determine num_classes based on the dataset
     if 'cifar' in dataset.lower():
-        data_input_size = (32, 32)
-        data_input_channels = 3
         num_classes = 100 if '100' in dataset.lower() else 10
-    elif 'imagenet' in dataset.lower():
-        data_input_size = (16, 16)
-        data_input_channels = 3
-        num_classes = 120
+    elif 'imagenet' in dataset.lower(): # Assuming ImageNet16-120 subset or similar
+        num_classes = 120 
+    else:
+        # Fallback or raise error if dataset is unknown
+        logger.warning(f"Unknown dataset {dataset}, defaulting to 10 classes. ZCP score might be affected.")
+        num_classes = 10
     
+    # Parse input shape
+    shape_obj_in = None
+    if isinstance(operation_input_full_shape, torch.Size):
+        shape_obj_in = operation_input_full_shape
+    elif isinstance(operation_input_full_shape, tuple) and len(operation_input_full_shape) > 0 and \
+         isinstance(operation_input_full_shape[0], torch.Size):
+        shape_obj_in = operation_input_full_shape[0]
+    else:
+        raise ValueError(f"Unsupported operation_input_full_shape format: {operation_input_full_shape}")
+
+    if len(shape_obj_in) == 4:  # (N, C, H, W)
+        op_input_chw = tuple(shape_obj_in[1:])
+    elif len(shape_obj_in) == 3:  # (C, H, W)
+        op_input_chw = tuple(shape_obj_in)
+    else:
+        raise ValueError(f"Unsupported dimensions in parsed input shape: {shape_obj_in}")
+
+    # Parse output shape
+    # Assuming operation_output_full_shape is torch.Size based on logs and typical usage
+    if not isinstance(operation_output_full_shape, torch.Size):
+         raise ValueError(f"Expected operation_output_full_shape to be torch.Size, got {type(operation_output_full_shape)}")
+
+    if len(operation_output_full_shape) == 4:  # (N, C, H, W)
+        op_output_chw = tuple(operation_output_full_shape[1:])
+    elif len(operation_output_full_shape) == 3:  # (C, H, W)
+        op_output_chw = tuple(operation_output_full_shape)
+    else:
+        raise ValueError(f"Unsupported dimensions in output shape: {operation_output_full_shape}")
+
+    logger.info(f"Evaluating operation {type(operation).__name__} with ZCP method: {zcp_method}")
+    logger.info(f"Op Input CHW: {op_input_chw}, Op Output CHW: {op_output_chw}, Num Classes: {num_classes}")
+
+    # Configuration for SyntheticMicroArchitecture
+    fixed_intermediate_dim = 256  # Example fixed dimension
+    # channel_adaptation_method is now fixed to 'fair' internally in SyntheticMicroArchitecture
+
     try:
         synthetic_net = SyntheticMicroArchitecture(
             operation=operation,
-            data_input_channels=data_input_channels,
-            data_input_size=data_input_size,
-            num_classes=num_classes
+            operation_input_shape_chw=op_input_chw,
+            operation_output_shape_chw=op_output_chw,
+            num_classes=num_classes,
+            fixed_intermediate_channel_dim=fixed_intermediate_dim
+            # No channel_adaptation_method argument needed here anymore
         )
         
         # Evaluate with ZCP
-        zc_predictor = ZeroCost(method_type=zc_method)
+        zc_predictor = ZeroCost(method_type=zcp_method)
+        # The ZeroCost predictor's query method handles moving the model to the device.
         score = zc_predictor.query(graph=synthetic_net, dataloader=dataloader)
         
-        if score is None:
-            logger.warning("ZCP returned None score")
-            return 0.0  # Default score
+        if score is None or (isinstance(score, float) and (math.isnan(score) or math.isinf(score))):
+            logger.warning(f"ZCP returned problematic score ({score}) for {type(operation).__name__}. Defaulting to 0.0.")
+            return 0.0  # Default score for problematic cases
             
-        if zc_method.lower() in ['grasp']:
-            # For methods where lower score is better, invert the relationship
-            final_score = 1.0 / (score if score != 0 else 1e-10)
-            logger.info(f"ZCP score: {score:.6f}, inverted score: {final_score:.6f}")
+        # Some ZCP methods like 'grasp' are lower-is-better.
+        # We want higher-is-better for the optimizer, so invert if necessary.
+        # Check specific ZCP literature for their interpretation.
+        # Assuming synflow, jacov, snip, fisher, grad_norm are higher-is-better.
+        if zcp_method.lower() in ['grasp']: 
+            # For methods where lower score is better, invert the relationship.
+            # Avoid division by zero. Add small epsilon if score can be 0.
+            final_score = 1.0 / (score + 1e-10) if abs(score) < 1e-9 else 1.0 / score
+            logger.info(f"Original ZCP score ({zcp_method}): {score:.6f}, Inverted score: {final_score:.6f}")
         else:
-            # For most ZCPs (higher is better), use as is
-            final_score = score
-            logger.info(f"ZCP score: {final_score:.6f}")
+            # For most ZCPs (higher is better), use as is.
+            final_score = float(score)
+            logger.info(f"ZCP score ({zcp_method}): {final_score:.6f}")
         
         return final_score
         
     except Exception as e:
-        logger.warning(f"ZCP evaluation failed: {str(e)}")
-        return 0.0  # Default score
+        logger.error(f"ZCP evaluation failed for operation {type(operation).__name__} with method {zcp_method}: {str(e)}", exc_info=True)
+        return 0.0  # Default score on critical failure

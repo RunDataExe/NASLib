@@ -8,55 +8,22 @@ from naslib.search_spaces.core.primitives import AbstractPrimitive # Add this im
 
 logger = logging.getLogger(__name__)
 
-
-# def adapt_channels(x, target_channels):
-#     """Adapt tensor channels to target dimension (simple slice or pad)."""
-#     current_channels = x.shape[1]
-    
-#     if current_channels == target_channels:
-#         return x
-        
-#     if current_channels < target_channels:
-#         padding_shape = list(x.shape)
-#         padding_shape[1] = target_channels - current_channels
-#         padding = torch.zeros(padding_shape, device=x.device, dtype=x.dtype)
-#         x = torch.cat([x, padding], dim=1)
-#     elif current_channels > target_channels:
-#         x = x[:, :target_channels]
-    
-#     # logger.debug(f"Adapting channels (simple): input_shape[1]={current_channels}, target_channels={target_channels}, output_shape[1]={x.shape[1]}")
-#     return x
-
 def adapt_spatial(x, target_h, target_w):
-    """Adapt tensor spatial dimensions to target using center padding or center cropping."""
-    _, _, h, w = x.shape
+    """Adapt tensor spatial dimensions to target"""
+        
+    h, w = x.shape[-2:]
     
-    if h == target_h and w == target_w:
-        return x
-
-    # Padding if current dimensions are smaller (center padding)
     if h < target_h or w < target_w:
-        pad_h_total = max(0, target_h - h)
-        pad_w_total = max(0, target_w - w)
-        
-        pad_top = pad_h_total // 2
-        pad_bottom = pad_h_total - pad_top # Handles odd padding
-        pad_left = pad_w_total // 2
-        pad_right = pad_w_total - pad_left # Handles odd padding
-        
-        x = F.pad(x, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
-        # Update current dimensions after padding
-        # _, _, h, w = x.shape # Not needed as x is returned
-
-    # Cropping if current dimensions are larger (center cropping)
-    elif h > target_h or w > target_w: # Use elif to avoid re-evaluating if padding occurred and met criteria
+        pad_h = max(0, target_h - h)
+        pad_w = max(0, target_w - w)
+        padding = (pad_w//2, pad_w-pad_w//2, pad_h//2, pad_h-pad_h//2)
+        x = F.pad(x, padding)
+    
+    if h > target_h or w > target_w:
         start_h = (h - target_h) // 2
-        end_h = start_h + target_h
         start_w = (w - target_w) // 2
-        end_w = start_w + target_w
-        x = x[:, :, start_h:end_h, start_w:end_w]
-        
-    # logger.debug(f"Adapting spatial: input_hw=({h_orig},{w_orig}), target_hw=({target_h},{target_w}), output_hw=({x.shape[-2]},{x.shape[-1]})")
+        x = x[:, :, start_h:start_h+target_h, start_w:start_w+target_w]
+    
     return x
 
 def adapt_channels_fairly(x, target_channels):
@@ -86,9 +53,6 @@ def adapt_channels_fairly(x, target_channels):
             unique_idx_to_place_at_in_output = torch.unique(idx_to_place_at_in_output)
 
             if len(unique_idx_to_place_at_in_output) < current_channels:
-                # Not enough unique slots to place all input channels "fairly" and uniquely.
-                # We will place the first len(unique_idx_to_place_at_in_output) input channels
-                # into these available unique slots.
                 logger.warning(f"Fair upsampling: Not enough unique target slots ({len(unique_idx_to_place_at_in_output)}) for all {current_channels} input channels when target is {target_channels}. "
                                f"Placing first {len(unique_idx_to_place_at_in_output)} input channels into available unique slots.")
                 output_tensor.index_copy_(1, unique_idx_to_place_at_in_output, x[:, :len(unique_idx_to_place_at_in_output), :, :])
@@ -126,7 +90,7 @@ class SyntheticMicroArchitecture(nn.Module):
     Uses fixed classifier dimensionality and fair channel adaptation for operation output.
     """
     def __init__(self, operation, operation_input_shape_chw, operation_output_shape_chw, 
-                 num_classes, fixed_intermediate_channel_dim=256): # Removed channel_adaptation_method
+                 num_classes, fixed_intermediate_channel_dim=256):
         super().__init__()
         self.operation = operation 
         
@@ -154,9 +118,9 @@ class SyntheticMicroArchitecture(nn.Module):
 
     def forward(self, x): 
         # 1. Adapt input to the operation's expected input shape
-        x_adapted_input = adapt_channels_fairly(x, self.op_input_C)
+        x_adapted_input_channels = adapt_channels_fairly(x, self.op_input_C)
 
-        x_adapted_input = adapt_spatial(x_adapted_input, self.op_input_H, self.op_input_W)
+        x_adapted_input = adapt_spatial(x_adapted_input_channels, self.op_input_H, self.op_input_W)
 
         # 2. Apply the operation
         if isinstance(self.operation, AbstractPrimitive):
@@ -260,8 +224,7 @@ def evaluate_micro_architecture_zcp(operation, operation_input_full_shape, opera
             operation_input_shape_chw=op_input_chw,
             operation_output_shape_chw=op_output_chw,
             num_classes=num_classes,
-            fixed_intermediate_channel_dim=fixed_intermediate_dim
-            # No channel_adaptation_method argument needed here anymore
+            fixed_intermediate_channel_dim=fixed_intermediate_dim,
         )
         
         # Evaluate with ZCP
@@ -270,9 +233,16 @@ def evaluate_micro_architecture_zcp(operation, operation_input_full_shape, opera
         score = zc_predictor.query(graph=synthetic_net, dataloader=dataloader)
         
         if score is None or (isinstance(score, float) and (math.isnan(score) or math.isinf(score))):
-            logger.warning(f"ZCP returned problematic score ({score}) for {type(operation).__name__}. Defaulting to 0.0.")
-            return 0.0  # Default score for problematic cases
-            
+            logger.warning(f"ZCP returned problematic score ({score}) for {type(operation).__name__}. Defaulting to 0.0, which sigmoid will map to 0.5.")
+            # For sigmoid, a raw score of 0.0 results in 0.5. 
+            # If a true "failure" score of 0.0 post-sigmoid is desired, 
+            # a very negative number could be used, e.g., -float('inf'), 
+            # but 0.0 raw is a neutral point for sigmoid.
+            # Let's return 0.5 in this case (sigmoid(0))
+            return torch.sigmoid(torch.tensor(0.0)).item() 
+
+        #! synflow has negative and positive scores?
+
         # Some ZCP methods like 'grasp' are lower-is-better.
         # We want higher-is-better for the optimizer, so invert if necessary.
         # Check specific ZCP literature for their interpretation.
@@ -280,15 +250,28 @@ def evaluate_micro_architecture_zcp(operation, operation_input_full_shape, opera
         if zcp_method.lower() in ['grasp']: 
             # For methods where lower score is better, invert the relationship.
             # Avoid division by zero. Add small epsilon if score can be 0.
-            final_score = 1.0 / (score + 1e-10) if abs(score) < 1e-9 else 1.0 / score
-            logger.info(f"Original ZCP score ({zcp_method}): {score:.6f}, Inverted score: {final_score:.6f}")
+            # Note: Inverting and then applying sigmoid might not be ideal.
+            # Consider if the "lower-is-better" logic should be handled before sigmoid,
+            # or if the raw score should be negated before sigmoid for such cases.
+            # For now, applying inversion as before.
+            intermediate_score = 1.0 / (score + 1e-10) if abs(score) < 1e-9 else 1.0 / score
+            logger.info(f"Original ZCP score ({zcp_method}): {score:.6f}, Inverted score: {intermediate_score:.6f}")
         else:
             # For most ZCPs (higher is better), use as is.
-            final_score = float(score)
-            logger.info(f"ZCP score ({zcp_method}): {final_score:.6f}")
+            intermediate_score = float(score)
+            logger.info(f"ZCP score ({zcp_method}): {intermediate_score:.6f}")
+        
+        # Apply sigmoid to map the score to [0, 1]
+        final_score_tensor = torch.sigmoid(torch.tensor(intermediate_score, dtype=torch.float32))
+        final_score = final_score_tensor.item()
+        logger.info(f"Intermediate score: {intermediate_score:.6f}, Sigmoid mapped score: {final_score:.6f}")
         
         return final_score
         
     except Exception as e:
         logger.error(f"ZCP evaluation failed for operation {type(operation).__name__} with method {zcp_method}: {str(e)}", exc_info=True)
-        return 0.0  # Default score on critical failure
+        # Default score on critical failure, sigmoid(0.0) = 0.5
+        # If a true 0.0 is desired post-sigmoid, this should return a very negative number before sigmoid.
+        # For now, returning 0.5 to indicate neutral/uncertainty due to failure.
+        return torch.sigmoid(torch.tensor(0.0)).item()
+

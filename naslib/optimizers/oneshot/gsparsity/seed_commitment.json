@@ -1,0 +1,9 @@
+{
+    "timestamp": "2025-06-03T13:05:35.403843",
+    "stock_ticker": "IBM",
+    "target_date": "2025-06-04",
+    "user_prediction": "231.0000",
+    "event_description": "Closing price of IBM on 2025-06-04. User prediction: 231.0000",
+    "num_seeds": 4,
+    "seed_generation_method": "SHA256(timestamp + event_description + actual_stock_price)"
+}

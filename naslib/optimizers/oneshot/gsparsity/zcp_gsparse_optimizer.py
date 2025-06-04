@@ -18,7 +18,9 @@ import naslib.search_spaces.core.primitives as primitives
 from naslib.utils.shape_annotator import ShapeAnnotator
 
 import numpy as np
-from naslib.optimizers.oneshot.gsparsity.operation_zero_cost_proxy_scoring import evaluate_micro_architecture_zcp
+from naslib.optimizers.oneshot.gsparsity.operation_zero_cost_proxy_scoring import (
+    evaluate_micro_architecture_zcp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +72,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.normalization_exponent = config.search.normalization_exponent
         self.operation_weights = torch.nn.ParameterList()
         self.zcp_method = config.search.zcp_method
-        self.zcp_dataloader = None 
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-
+        self.zcp_dataloader = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @staticmethod
     def update_ops(edge):
@@ -245,32 +244,43 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                 group_dim += torch.numel(
                                     edge.data.op.primitives[i].op[j].weight
                                 )
-                                if hasattr(edge.data.op.primitives[i].op[j], 'shapes'):
-                                    logger.info(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
-                                    logger.info(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
+                                if hasattr(edge.data.op.primitives[i].op[j], "shapes"):
+                                    logger.info(
+                                        f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}"
+                                    )
+                                    logger.info(
+                                        f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}"
+                                    )
                                 else:
-                                    logger.info(f"Primitive {i} operation {j} has no shape information.")
-                                
+                                    logger.info(
+                                        f"Primitive {i} operation {j} has no shape information."
+                                    )
+
                                 zcp_score = evaluate_micro_architecture_zcp(
-                                operation=edge.data.op.primitives[i].op[j],
-                                operation_input_full_shape=edge.data.op.primitives[i].op[j].shapes['input_shape'],
-                                operation_output_full_shape=edge.data.op.primitives[i].op[j].shapes['output_shape'],
-                                dataloader=self.zcp_dataloader,
-                                zcp_method=self.zcp_method,
-                                dataset=self.dataset
+                                    operation=edge.data.op.primitives[i].op[j],
+                                    operation_input_full_shape=edge.data.op.primitives[
+                                        i
+                                    ]
+                                    .op[j]
+                                    .shapes["input_shape"],
+                                    operation_output_full_shape=edge.data.op.primitives[
+                                        i
+                                    ]
+                                    .op[j]
+                                    .shapes["output_shape"],
+                                    dataloader=self.zcp_dataloader,
+                                    zcp_method=self.zcp_method,
+                                    dataset=self.dataset,
                                 )
-                                logger.info(f"Primitive {i} operation {j} ZCP: {zcp_score}")
+                                logger.info(
+                                    f"Primitive {i} operation {j} ZCP: {zcp_score}"
+                                )
                                 weight += (
                                     torch.norm(
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
                                 ).item() * zcp_score
-                                weight += (
-                                    torch.norm(
-                                        edge.data.op.primitives[i].op[j].weight, 2
-                                    ) ** 2
-                                ).item()
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -302,26 +312,34 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         size = torch.tensor(
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
-                        if hasattr(edge.data.op.primitives[i], 'shapes'):
-                            logger.info(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
-                            logger.info(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
+                        if hasattr(edge.data.op.primitives[i], "shapes"):
+                            logger.info(
+                                f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}"
+                            )
+                            logger.info(
+                                f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}"
+                            )
                         else:
                             logger.info(f"Primitive {i} has no shape information.")
 
                         zcp_score = evaluate_micro_architecture_zcp(
-                        operation=edge.data.op.primitives[i], 
-                        operation_input_full_shape=edge.data.op.primitives[i].shapes['input_shape'],
-                        operation_output_full_shape=edge.data.op.primitives[i].shapes['output_shape'],
-                        dataloader=self.zcp_dataloader, 
-                        zcp_method=self.zcp_method,
-                        dataset=self.dataset
+                            operation=edge.data.op.primitives[i],
+                            operation_input_full_shape=edge.data.op.primitives[
+                                i
+                            ].shapes["input_shape"],
+                            operation_output_full_shape=edge.data.op.primitives[
+                                i
+                            ].shapes["output_shape"],
+                            dataloader=self.zcp_dataloader,
+                            zcp_method=self.zcp_method,
+                            dataset=self.dataset,
                         )
                         logger.info(f"Primitive {i} ZCP: {zcp_score}")
                         edge.data.weights[i] += (
-                        edge.data.op.primitives[i].weight.item()
+                            edge.data.op.primitives[i].weight.item()
                         ) ** 2 * zcp_score
                         edge.data.dimension[i] += size
-                        
+
         def normalize_weights(edge):
             if edge.data.has("alpha"):
                 for i in range(len(edge.data.op.primitives)):
@@ -443,32 +461,43 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                 group_dim += torch.numel(
                                     edge.data.op.primitives[i].op[j].weight
                                 )
-                                if hasattr(edge.data.op.primitives[i].op[j], 'shapes'):
-                                    logger.info(f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}")
-                                    logger.info(f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}")
+                                if hasattr(edge.data.op.primitives[i].op[j], "shapes"):
+                                    logger.info(
+                                        f"Input shape: {edge.data.op.primitives[i].op[j].shapes['input_shape']} - Primitive {i}, Op {j}"
+                                    )
+                                    logger.info(
+                                        f"Output shape: {edge.data.op.primitives[i].op[j].shapes['output_shape']} - Primitive {i}, Op {j}"
+                                    )
                                 else:
-                                    logger.info(f"Primitive {i} operation {j} has no shape information.")
-                                
+                                    logger.info(
+                                        f"Primitive {i} operation {j} has no shape information."
+                                    )
+
                                 zcp_score = evaluate_micro_architecture_zcp(
-                                operation=edge.data.op.primitives[i].op[j],
-                                operation_input_full_shape=edge.data.op.primitives[i].op[j].shapes['input_shape'],
-                                operation_output_full_shape=edge.data.op.primitives[i].op[j].shapes['output_shape'],
-                                dataloader=self.zcp_dataloader,
-                                zcp_method=self.zcp_method,
-                                dataset=self.dataset
+                                    operation=edge.data.op.primitives[i].op[j],
+                                    operation_input_full_shape=edge.data.op.primitives[
+                                        i
+                                    ]
+                                    .op[j]
+                                    .shapes["input_shape"],
+                                    operation_output_full_shape=edge.data.op.primitives[
+                                        i
+                                    ]
+                                    .op[j]
+                                    .shapes["output_shape"],
+                                    dataloader=self.zcp_dataloader,
+                                    zcp_method=self.zcp_method,
+                                    dataset=self.dataset,
                                 )
-                                logger.info(f"Primitive {i} operation {j} ZCP: {zcp_score}")
+                                logger.info(
+                                    f"Primitive {i} operation {j} ZCP: {zcp_score}"
+                                )
                                 weight += (
                                     torch.norm(
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
                                 ).item() * zcp_score
-                                weight += (
-                                    torch.norm(
-                                        edge.data.op.primitives[i].op[j].weight, 2
-                                    ) ** 2
-                                ).item()
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -500,23 +529,31 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         size = torch.tensor(
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
-                        if hasattr(edge.data.op.primitives[i], 'shapes'):
-                            logger.info(f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}")
-                            logger.info(f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}")
+                        if hasattr(edge.data.op.primitives[i], "shapes"):
+                            logger.info(
+                                f"Input shape: {edge.data.op.primitives[i].shapes['input_shape']} - Primitive {i}"
+                            )
+                            logger.info(
+                                f"Output shape: {edge.data.op.primitives[i].shapes['output_shape']} - Primitive {i}"
+                            )
                         else:
                             logger.info(f"Primitive {i} has no shape information.")
 
                         zcp_score = evaluate_micro_architecture_zcp(
-                        operation=edge.data.op.primitives[i], 
-                        operation_input_full_shape=edge.data.op.primitives[i].shapes['input_shape'],
-                        operation_output_full_shape=edge.data.op.primitives[i].shapes['output_shape'],
-                        dataloader=self.zcp_dataloader, 
-                        zcp_method=self.zcp_method,
-                        dataset=self.dataset
+                            operation=edge.data.op.primitives[i],
+                            operation_input_full_shape=edge.data.op.primitives[
+                                i
+                            ].shapes["input_shape"],
+                            operation_output_full_shape=edge.data.op.primitives[
+                                i
+                            ].shapes["output_shape"],
+                            dataloader=self.zcp_dataloader,
+                            zcp_method=self.zcp_method,
+                            dataset=self.dataset,
                         )
                         logger.info(f"Primitive {i} ZCP: {zcp_score}")
                         edge.data.weights[i] += (
-                        edge.data.op.primitives[i].weight.item()
+                            edge.data.op.primitives[i].weight.item()
                         ) ** 2 * zcp_score
                         edge.data.dimension[i] += size
 
@@ -535,6 +572,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 for i in range(len(edge.data.weights)):
                     edge.data.weights[i] = 0
                     edge.data.dimension[i] = 0
+
         self.graph.update_edges(
             update_l2_weights, scope=self.scope, private_edge_data=True
         )

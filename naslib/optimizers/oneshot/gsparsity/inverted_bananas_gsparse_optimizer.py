@@ -10,11 +10,10 @@ from naslib.optimizers.oneshot.gsparsity.gsparsity_optimizer import GSparseOptim
 from naslib.optimizers.oneshot.gsparsity.inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
-from naslib.optimizers.oneshot.gsparsity.remove_arch_from_search_space import (
+from naslib.utils.remove_arch_from_search_space import (
     add_betas_to_edges,
     remove_architecture,
 )
-from naslib.utils import get_zc_benchmark_api
 from naslib.search_spaces.core.query_metrics import Metric
 # Assuming NasBench201SearchSpace or similar that has get_op_indices()
 # from naslib.search_spaces.nasbench201.conversions import convert_naslib_to_op_indices # Not needed if arch.get_op_indices() works
@@ -49,6 +48,7 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
             f"Will remove {self.removal_percentage * 100:.2f}% of architectures after Stage 1."
         )
         self.stage1_optimizer = Inverted_Bananas(self.stage1_config)
+        self.stage1_optimizer.performance_metric = Metric.TRAIN_ACCURACY
 
         # Stage 2: GSParseOptimizer configuration
         self.stage2_config = deepcopy(config.stage2)
@@ -135,9 +135,7 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
             logger.info(
                 "Adapting search space and calling before_training for Stage 2 (GSParseOptimizer) with unpruned space."
             )
-            self.stage2_optimizer.adapt_search_space(
-                self.search_space, self.scope, self.dataset_api
-            )
+            self.stage2_optimizer.adapt_search_space(self.search_space, self.scope)
             self.stage2_optimizer.before_training()
             return
 
@@ -168,23 +166,27 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
         logger.info(
             f"Starting pruning of {len(self.worst_architectures_op_indices)} architectures from the main search space."
         )
-        for i, arch_op_idx in enumerate(self.worst_architectures_op_indices):
+        for i, arch_op_idx_raw in enumerate(self.worst_architectures_op_indices):
             logger.debug(
-                f"Removing architecture {i + 1}/{len(self.worst_architectures_op_indices)}: {arch_op_idx}"
+                f"Attempting to remove architecture {i + 1}/{len(self.worst_architectures_op_indices)}: {arch_op_idx_raw}"
             )
             try:
+                # Ensure arch_op_idx is a list of Python ints
+                # This conversion will handle cases like list of numpy.int64 or list of 0-dim tensors
+                arch_op_idx_cleaned = [int(val) for val in arch_op_idx_raw]
+
                 remove_architecture(
                     self.search_space,
-                    arch_op_idx,
+                    arch_representation=arch_op_idx_cleaned,  # Use the cleaned version
                     representation_type="op_indices",
                     scope=self.scope,
                 )
             except IndexError as e:
                 logger.warning(
-                    f"Could not remove architecture {arch_op_idx} (already removed or op not found?): {e}"
+                    f"Could not remove architecture {arch_op_idx_raw} (already removed or op not found?): {e}"
                 )
             except Exception as e:
-                logger.error(f"Error removing architecture {arch_op_idx}: {e}")
+                logger.error(f"Error removing architecture {arch_op_idx_raw}: {e}")
         logger.info("Pruning complete.")
 
         self.current_stage = 2

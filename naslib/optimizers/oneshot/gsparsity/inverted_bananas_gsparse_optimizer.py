@@ -285,21 +285,35 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
             return self.stage2_optimizer.get_model_size()
 
     def get_checkpointables(self):
-        # checkpointables = super().get_checkpointables()
-        return {
-            "current_stage": self.current_stage,
-            "model": self.stage2_optimizer.get_checkpointables()["model"]
-            if self.current_stage == 2
-            else self.stage1_optimizer.get_checkpointables()["model"],
-            "current_overall_epoch": self.current_overall_epoch,
-            "worst_architectures_op_indices": self.worst_architectures_op_indices,
-            "stage1_optimizer_state": self.stage1_optimizer.get_checkpointables()
-            if hasattr(self.stage1_optimizer, "get_checkpointables")
-            else {},
-            "stage2_optimizer_state": self.stage2_optimizer.get_checkpointables()
-            if hasattr(self.stage2_optimizer, "get_checkpointables")
-            else {},
-        }
+        if self.current_stage == 1:
+            return {
+                "model": self.stage1_optimizer.get_checkpointables()["model"],
+            }
+        elif self.current_stage == 2:
+            return {
+                "model": self.stage2_optimizer.get_checkpointables()["model"],
+                "op_optimizer": self.stage2_optimizer.get_checkpointables()[
+                    "op_optimizer"
+                ],
+                "op_optimizer_evaluate": self.stage2_optimizer.get_checkpointables()[
+                    "op_optimizer_evaluate"
+                ],
+            }
+
+        # return {
+        #     "current_stage": self.current_stage,
+        #     "model": self.stage2_optimizer.get_checkpointables()["model"]
+        #     if self.current_stage == 2
+        #     else self.stage1_optimizer.get_checkpointables()["model"],
+        #     "current_overall_epoch": self.current_overall_epoch,
+        #     "worst_architectures_op_indices": self.worst_architectures_op_indices,
+        #     "stage1_optimizer_state": self.stage1_optimizer.get_checkpointables()
+        #     if hasattr(self.stage1_optimizer, "get_checkpointables")
+        #     else {},
+        #     "stage2_optimizer_state": self.stage2_optimizer.get_checkpointables()
+        #     if hasattr(self.stage2_optimizer, "get_checkpointables")
+        #     else {},
+        # }
 
     # def load_checkpointables(self, checkpointables):
     #     super().load_checkpointables(checkpointables)

@@ -508,11 +508,6 @@ class GSparseOptimizer(MetaOptimizer):
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
-        # The two stage optimizer calls this information before it exists
-        self.graph = getattr(self, "model", None)
-        self.op_optimizer = getattr(self, "op_optimizer", None)
-        self.op_optimizer_evaluate = getattr(self, "op_optimizer_evaluate", None)
-
         return {
             "model": self.graph,
             "op_optimizer": self.op_optimizer,

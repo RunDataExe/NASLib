@@ -72,7 +72,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.normalization_exponent = config.search.normalization_exponent
         self.operation_weights = torch.nn.ParameterList()
         self.zcp_method = config.search.zcp_method
-        self.zcp_dataloader = None
+        self.train_loader = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @staticmethod
@@ -136,7 +136,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 should be optimized by the optimizer.
         """
         self.search_space = search_space
-        self.zcp_dataloader = train_loader
+        self.train_loader = train_loader
         graph = search_space.clone()
 
         # If there is no scope defined, let's use the search space default one
@@ -198,6 +198,11 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         input_train, target_train = data_train
         input_val, target_val = data_val
+
+        input_train = input_train.to(self.device)
+        target_train = target_train.to(self.device)
+        input_val = input_val.to(self.device)
+        target_val = target_val.to(self.device)
 
         self.graph.train()
         self.op_optimizer.zero_grad()
@@ -268,7 +273,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                     ]
                                     .op[j]
                                     .shapes["output_shape"],
-                                    dataloader=self.zcp_dataloader,
+                                    dataloader=self.train_loader,
                                     zcp_method=self.zcp_method,
                                     dataset=self.dataset,
                                 )
@@ -330,7 +335,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                             operation_output_full_shape=edge.data.op.primitives[
                                 i
                             ].shapes["output_shape"],
-                            dataloader=self.zcp_dataloader,
+                            dataloader=self.train_loader,
                             zcp_method=self.zcp_method,
                             dataset=self.dataset,
                         )
@@ -485,7 +490,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                     ]
                                     .op[j]
                                     .shapes["output_shape"],
-                                    dataloader=self.zcp_dataloader,
+                                    dataloader=self.train_loader,
                                     zcp_method=self.zcp_method,
                                     dataset=self.dataset,
                                 )
@@ -547,7 +552,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                             operation_output_full_shape=edge.data.op.primitives[
                                 i
                             ].shapes["output_shape"],
-                            dataloader=self.zcp_dataloader,
+                            dataloader=self.train_loader,
                             zcp_method=self.zcp_method,
                             dataset=self.dataset,
                         )
@@ -596,6 +601,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             reinitialize_l2_weights, scope=self.scope, private_edge_data=False
         )
         self.operation_weights = torch.nn.ParameterList()
+        self.graph.to(self.device)
         super().new_epoch(epoch)
 
     def after_training(self):

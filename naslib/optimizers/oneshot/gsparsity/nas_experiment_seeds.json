@@ -1,0 +1,27 @@
+{
+    "timestamp": "2025-06-03T13:05:35.403843",
+    "stock_ticker": "IBM",
+    "target_date": "2025-06-04",
+    "user_prediction": "231.0000",
+    "event_description": "Closing price of IBM on 2025-06-04. User prediction: 231.0000",
+    "num_seeds": 4,
+    "seed_generation_method": "SHA256(timestamp + event_description + actual_stock_price)",
+    "event_outcome_data": {
+        "source": "Alpha Vantage API",
+        "fetched_closing_price": "265.5200"
+    },
+    "seeds": [
+        2152435495,
+        2092269736,
+        1544457859,
+        3788705088
+    ],
+    "verification_inputs_for_hash": {
+        "timestamp": "2025-06-03T13:05:35.403843",
+        "event_description": "Closing price of IBM on 2025-06-04. User prediction: 231.0000",
+        "event_outcome (actual_price)": "265.5200"
+    },
+    "seed_base_string_hashed": "2025-06-03T13:05:35.403843Closing price of IBM on 2025-06-04. User prediction: 231.0000265.5200",
+    "final_seed_base_hash": "d8f91c71c800f6d33d7958c8c35892869491fd7bae465f4a5bdb50722e88de65",
+    "verification_date": "2025-06-05T08:35:19.278205"
+}

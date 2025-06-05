@@ -5,6 +5,8 @@
 *.err
 *.log
 *.json
+!naslib/optimizers/oneshot/gsparsity/seed_commitment.json
+!naslib/optimizers/oneshot/gsparsity/nas_experiment_seeds.json
 
 # Model files
 *.pth

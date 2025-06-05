@@ -300,84 +300,18 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
                 ],
             }
 
-        # return {
-        #     "current_stage": self.current_stage,
-        #     "model": self.stage2_optimizer.get_checkpointables()["model"]
-        #     if self.current_stage == 2
-        #     else self.stage1_optimizer.get_checkpointables()["model"],
-        #     "current_overall_epoch": self.current_overall_epoch,
-        #     "worst_architectures_op_indices": self.worst_architectures_op_indices,
-        #     "stage1_optimizer_state": self.stage1_optimizer.get_checkpointables()
-        #     if hasattr(self.stage1_optimizer, "get_checkpointables")
-        #     else {},
-        #     "stage2_optimizer_state": self.stage2_optimizer.get_checkpointables()
-        #     if hasattr(self.stage2_optimizer, "get_checkpointables")
-        #     else {},
-        # }
-
-    # def load_checkpointables(self, checkpointables):
-    #     super().load_checkpointables(checkpointables)
-    #     self.current_stage = checkpointables.get("current_stage", 1)
-    #     self.current_overall_epoch = checkpointables.get("current_overall_epoch", 0)
-    #     self.worst_architectures_op_indices = checkpointables.get(
-    #         "worst_architectures_op_indices", []
-    #     )
-
-    #     logger.info(
-    #         f"Loading checkpoint. Resuming at stage {self.current_stage}, overall epoch {self.current_overall_epoch}."
-    #     )
-
-    #     stage1_state = checkpointables.get("stage1_optimizer_state")
-    #     if hasattr(self.stage1_optimizer, "load_checkpointables") and stage1_state:
-    #         self.stage1_optimizer.load_checkpointables(stage1_state)
-
-    #     stage2_state = checkpointables.get("stage2_optimizer_state")
-    #     if hasattr(self.stage2_optimizer, "load_checkpointables") and stage2_state:
-    #         self.stage2_optimizer.load_checkpointables(stage2_state)
-
-    #     # Important: The search_space itself is checkpointed by the Trainer.
-    #     # After it's loaded by the Trainer, we need to ensure it's correctly set up here.
-    #     if self.search_space:
-    #         add_betas_to_edges(self.search_space, scope=self.scope)  # Idempotent
-
-    #         # If resuming into stage 2, or after pruning was supposed to happen,
-    #         # ensure stage2_optimizer is adapted with the current self.search_space
-    #         # (which should be the pruned one if loaded correctly by trainer).
-    #         if self.current_stage == 2:
-    #             logger.info(
-    #                 "Resuming in Stage 2. Re-adapting Stage 2 optimizer with loaded search space."
-    #             )
-    #             self.stage2_optimizer.adapt_search_space(
-    #                 self.search_space,
-    #                 self.scope,
-    #                 self.dataset_api,
-    #             )
-    #             # Calling before_training() again might be necessary if its state wasn't fully captured
-    #             # or if it needs to re-initialize based on the potentially modified search space.
-    #             # However, this could also reset parts of its loaded state.
-    #             # This depends heavily on GSParseOptimizer's checkpointing and before_training logic.
-    #             # For now, we assume load_checkpointables + adapt_search_space is sufficient.
-    #             # self.stage2_optimizer.before_training() # Use with caution
-    #         elif (
-    #             self.current_stage == 1
-    #             and self.current_overall_epoch >= self.stage1_epochs
-    #         ):
-    #             # This case means we loaded a checkpoint that was saved *after* stage 1 finished
-    #             # but *before* stage 2 formally started its first epoch via new_epoch.
-    #             # The pruning should have occurred. We should ensure we are in stage 2.
-    #             logger.info(
-    #                 f"Resuming after Stage 1 ({self.current_overall_epoch}/{self.stage1_epochs - 1} epochs done). Ensuring transition to Stage 2."
-    #             )
-    #             if (
-    #                 not self.worst_architectures_op_indices
-    #                 and self.current_overall_epoch == self.stage1_epochs - 1
-    #             ):
-    #                 # If worst_architectures_op_indices is empty, it implies pruning might not have been saved/done yet.
-    #                 # This is a tricky state. For simplicity, if we are at the boundary, let train_statistics trigger it.
-    #                 pass
-    #             else:  # Pruning info is available or we are past the point.
-    #                 self.current_stage = 2
-    #                 self.stage2_optimizer.adapt_search_space(
-    #                     self.search_space, self.scope, self.dataset_api
-    #                 )
-    #                 # self.stage2_optimizer.before_training() # Caution
+    def after_training(self):
+        """
+        Called after the search process is finished.
+        Delegates to the Stage 2 optimizer's after_training method.
+        """
+        if self.current_stage == 2 and hasattr(self.stage2_optimizer, "after_training"):
+            logger.info(
+                "Calling after_training for Stage 2 optimizer (GSParseOptimizer)."
+            )
+            self.stage2_optimizer.config.save = self.config.save
+            self.stage2_optimizer.after_training()
+        else:
+            logger.info(
+                "No specific after_training actions for the current state of Inverted_Bananas_GsparseOptimizer or Stage 2 optimizer does not have after_training."
+            )

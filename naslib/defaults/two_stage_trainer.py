@@ -13,7 +13,9 @@ from fvcore.common.checkpoint import PeriodicCheckpointer
 
 from naslib.search_spaces.core.query_metrics import Metric
 
-from naslib import utils
+from naslib import (
+    utils,
+)  # Ensure utils is imported if AttrDict is used later and not already available
 from naslib.utils.log import log_every_n_seconds, log_first_n
 
 from typing import Callable
@@ -43,7 +45,14 @@ class Trainer(object):
         """
         self.optimizer = optimizer
         self.config = config
-        self.epochs = self.config.search.epochs
+
+        if hasattr(optimizer, "get_total_epochs"):
+            self.epochs = optimizer.get_total_epochs()
+            logger.info(f"Trainer epochs set by optimizer: {self.epochs}")
+        else:
+            self.epochs = self.config.search.epochs
+            logger.info(f"Trainer epochs set by config: {self.epochs}")
+
         self.lightweight_output = lightweight_output
 
         # preparations
@@ -134,10 +143,34 @@ class Trainer(object):
                 # with the new op_optimizer from the current stage.
                 current_op_optimizer = self.optimizer.get_op_optimizer()
                 if current_op_optimizer is not None:
-                    self.scheduler = self.build_search_scheduler(
-                        current_op_optimizer, self.config
+                    # Create a config for the scheduler specific to stage 2's duration
+                    _config_for_scheduler = utils.AttrDict()
+                    _config_for_scheduler.search = utils.AttrDict()
+
+                    # stage2_epochs should be available from the optimizer instance
+                    if hasattr(self.optimizer, "stage2_epochs"):
+                        _config_for_scheduler.search.epochs = (
+                            self.optimizer.stage2_epochs
+                        )
+                    else:
+                        # Fallback or error, though for Inverted_Bananas_GsparseOptimizer it should exist
+                        logger.warning(
+                            "optimizer.stage2_epochs not found, scheduler T_max might be incorrect for stage 2."
+                        )
+                        _config_for_scheduler.search.epochs = (
+                            self.config.search.epochs
+                        )  # Fallback to global
+
+                    _config_for_scheduler.search.learning_rate_min = (
+                        self.config.search.learning_rate_min
                     )
-                    logger.info("Scheduler (re)initialized for step-based search.")
+
+                    self.scheduler = self.build_search_scheduler(
+                        current_op_optimizer, _config_for_scheduler
+                    )
+                    logger.info(
+                        f"Scheduler (re)initialized for step-based search with T_max={_config_for_scheduler.search.epochs}."
+                    )
                 else:
                     # This case should ideally not happen if get_op_optimizer is implemented correctly
                     # for optimizers that use a step function.
@@ -649,7 +682,7 @@ class Trainer(object):
         self.periodic_checkpointer = PeriodicCheckpointer(
             checkpointer,
             period=period,
-            max_iter=self.config.search.epochs
+            max_iter=self.epochs  # Changed from self.config.search.epochs
             if search
             else self.config.evaluation.epochs,
         )

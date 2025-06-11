@@ -1,7 +1,7 @@
 import logging
 import torch
 import numpy as np
-from copy import deepcopy
+from copy import deepcopy  # Ensure deepcopy is imported
 from pathlib import Path
 import json
 
@@ -315,3 +315,9 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
             logger.info(
                 "No specific after_training actions for the current state of Inverted_Bananas_GsparseOptimizer or Stage 2 optimizer does not have after_training."
             )
+
+    def get_total_epochs(self):
+        """
+        Returns the total number of epochs this optimizer will run for.
+        """
+        return self.stage1_epochs + self.stage2_epochs

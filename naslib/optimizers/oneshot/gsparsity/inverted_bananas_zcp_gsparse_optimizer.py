@@ -321,3 +321,9 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
             logger.info(
                 "No specific after_training actions for the current state of Inverted_Bananas_ZCP_GSParseOptimizer or Stage 2 optimizer does not have after_training."
             )
+
+    def get_total_epochs(self):
+        """
+        Returns the total number of epochs this optimizer will run for.
+        """
+        return self.stage1_epochs + self.stage2_epochs

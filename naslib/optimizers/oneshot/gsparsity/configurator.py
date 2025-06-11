@@ -74,6 +74,12 @@ parser.add_argument(
 parser.add_argument(
     "--eval_epochs", type=int, default=600, help="Number of evaluation epochs"
 )
+parser.add_argument(
+    "--resume",
+    type=bool,
+    default=False,
+    help="Resume training from the last checkpoint. True, False",
+)
 
 args = parser.parse_args()
 
@@ -86,6 +92,13 @@ out_dir = args.out_dir
 search_epochs = args.search_epochs
 eval_epochs = args.eval_epochs
 zcp_method = args.zcp_method
+resume = args.resume
+
+
+#! maybe use one epoch (bias towards early influencial hp) / or much less data and more epochs for hpo than check hpo importance and with that reduce search space to imporatant params use the paper that says one epoch is unreasonably good and optuna
+
+#! use logarithmic for left bounded [0,infinit]; [log a, log b] bischlHyperparameterOptimizationFoundations2021
+#! should I use holdout/cross validation?
 
 #! Multiply time that it takes for random search by a factor that captures the prunning rate that was used in the zcp-gs-nas and gs-nas methods, how to make it such that only the search of the second phase is pruned? Should I not take 3 zcp´s per condition but have it as HP that is automatically tuned as well? Thus able to have more compute to tune one methodoligy and probably better results.
 
@@ -143,111 +156,6 @@ evaluation = {
     "auxiliary_weight": 0.4,
 }
 
-# Define optimizer-specific configurations
-#! Hyper parameters of each method:
-# %! GSparseOptimizer
-# % op_optimizer: torch.optim.Optimizer = ProxSGD,
-# % op_optimizer_evaluate: torch.optim.Optimizer = torch.optim.SGD,
-# % loss_criteria=torch.nn.CrossEntropyLoss(),
-
-# % super(GSparseOptimizer, self).__init__()
-# % self.op_optimizer = op_optimizer
-# % self.op_optimizer_evaluate = op_optimizer_evaluate
-# % self.loss = loss_criteria
-# % self.dataset = config.dataset
-# % self.grad_clip = config.search.grad_clip
-# % self.mu = config.search.weight_decay
-# % self.threshold = config.search.threshold
-# % self.normalization = config.search.normalization
-# % self.normalization_exponent = config.search.normalization_exponent
-
-
-# %! BANANAS seems like it already allows ZCP?
-# % self.config = config
-# % self.epochs = config.search.epochs
-
-# % self.performance_metric = Metric.VAL_ACCURACY
-# % self.dataset = config.dataset
-
-# % self.k = config.search.k
-# % self.num_init = config.search.num_init
-# % self.num_ensemble = config.search.num_ensemble
-# % self.predictor_type = config.search.predictor_type
-# % self.acq_fn_type = config.search.acq_fn_type
-# % self.acq_fn_optimization = config.search.acq_fn_optimization
-# % self.encoding_type = config.search.encoding_type  # currently not implemented
-# % self.num_arches_to_mutate = config.search.num_arches_to_mutate
-# % self.max_mutations = config.search.max_mutations
-# % self.num_candidates = config.search.num_candidates
-# % self.max_zerocost = 1000
-
-# % self.train_data = []
-# % self.next_batch = []
-# % self.history = torch.nn.ModuleList()
-
-# % self.zc = config.search.zc if hasattr(config.search, 'zc') else None
-# % self.semi = "semi" in self.predictor_type
-# % self.zc_api = zc_api
-# % self.use_zc_api = config.search.use_zc_api if hasattr(
-# %     config.search, 'use_zc_api') else False
-# % self.zc_names = config.search.zc_names if hasattr(
-# %     config.search, 'zc_names') else None
-# % self.zc_only = config.search.zc_only if hasattr(
-# %     config.search, 'zc_only') else False
-
-
-# %! LocalSearch
-# % self.config = config
-# % self.epochs = config.search.epochs
-
-# % self.performance_metric = Metric.VAL_ACCURACY
-# % self.dataset = config.dataset
-
-# % self.num_init = config.search.num_init
-# % self.nbhd = []
-# % self.chosen = None
-# % self.best_arch = None
-
-# % self.history = torch.nn.ModuleList()
-# % self.newest_child_idx = -1
-
-
-# %! RandomSearch
-# % somewhere I have to be able to set the numb of architectures looked at or does it just increase the num of sampled_archs[] till i stop maybe it is the 100 set here?
-
-# % def _update_history(self, child):
-# % if len(self.history) < 100:
-# %     self.history.append(child)
-# % else:
-# %     for i, p in enumerate(self.history):
-# %         if child.accuracy > p.accuracy:
-# %             self.history[i] = child
-# %             break
-
-# % self.performance_metric = Metric.VAL_ACCURACY
-# % self.dataset = config.dataset
-# % self.fidelity = config.search.fidelity
-# % self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# % self.sampled_archs = []
-# % self.history = torch.nn.ModuleList()
-
-# %! Random Sampling
-# % no Hyperparameters
-
-# %! DRNAS
-# % learning_rate: float = 0.025,
-# % momentum: float = 0.9,
-# % weight_decay: float = 0.0003,
-# % grad_clip: int = 5,
-# % unrolled: bool = False,
-# % arch_learning_rate: float = 0.0003,
-# % arch_weight_decay: float = 0.001,
-# % epochs: int = 50,
-# % op_optimizer: str = "SGD",
-# % arch_optimizer: str = "Adam",
-# % loss_criteria: str = "CrossEntropyLoss",
-# % **kwargs,
 optimizer_configs = {
     "rs": {
         "search": {
@@ -293,7 +201,7 @@ optimizer_configs = {
             "num_arches_to_mutate": 1,
             "max_mutations": 1,
             "num_candidates": 100,  # no correspondance but resonable value for aquisition function
-            "zc": True,  # Enable zero-cost predictors
+            "zc": True,  #! Enable zero-cost predictors has to be true else it is no zcp_bananas
             "use_zc_api": True,
             "zc_names": [zcp_method],  # Should be a list
             "zc_only": True,  # Set to True if you want to use only ZC predictors
@@ -301,7 +209,7 @@ optimizer_configs = {
             "train_portion": 0.5,  # threw error without
         },
     },
-    "drnas": {
+    "drnas": {  #! weight_decay (default: 0.0003), unrolled (default: False), arch_weight_decay (default: 0.001), op_optimizer (default: "SGD"), arch_optimizer (default: "Adam"), loss_criteria (default: "CrossEntropyLoss") are missing
         "search": {  # ? https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/drnas-c10-original/search-progressive-exp-20210227-085319/log.txt
             "checkpoint_freq": 5,
             "epochs": search_epochs,
@@ -319,7 +227,7 @@ optimizer_configs = {
     },
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,  # in paper 100
             "grad_clip": 0,  # in paper 0
             "weight_decay": 60,  # original 120 in paper 60
@@ -332,14 +240,9 @@ optimizer_configs = {
             "batch_size": 64,  # original 128; in log 64
             "train_portion": 0.95,  # originally 0.95 in paper 1
             "cutout": False,  # # in paper False (I think NASLIB only needs this for gsparsity on nasbench201)
-            "cutout_length": 16,  # in paper 16 (I think NASLIB only needs this for gsparsity on nasbench201)
-            # "cutout_prob": 1.0,  # (I think NASLIB only needs this for gsparsity on nasbench201)
+            "cutout_length": 16,  # in paper 16 (I think NASLIB only needs this for gsparsity on nasbench201) #! activate cutout prob
+            # "cutout_prob":  # (I think NASLIB only needs this for gsparsity on nasbench201)
         },
-        #! zcp-bananas
-        #! zcp_gsparsity
-        #! bananas-gsparsity
-        #! zcp-bananas-gsparsity
-        #! Is there a straight forward way of combining inverted_bananas-gsparsity; zcp_inverted_bananas-gsparsity; inverted_bananas-zcp_gsparsity; zcp_inverted_bananas-zcp_gsparsity such that inverted_bananas is first applied to the search space, searches for the worst architectures, removes them and then zcp_gsparsity or gsparsity is applied reguraly to the remaining architectures?
     },
     "zcp_gsparsity": {
         "search": {
@@ -362,7 +265,7 @@ optimizer_configs = {
     },
     "inverted_bananas": {
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
@@ -378,18 +281,22 @@ optimizer_configs = {
     },
     "inverted_bananas_gsparsity": {
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
             "learning_rate": 0.001,
             "learning_rate_min": 0.0001,
             "momentum": 0.8,
+            "cutout": False,
+            "cutout_length": 16,
+            # "cutout_prob":
         },
         # Stage 1 configuration (Inverted BANANAS)
         "stage1": {
             "search": {
-                "epochs": search_epochs // 3,
+                # "epochs": search_epochs // 3,
+                "epochs": 3,  #! 2
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -400,13 +307,15 @@ optimizer_configs = {
                 "num_arches_to_mutate": 1,
                 "max_mutations": 1,
                 "num_candidates": 100,
-                "removal_percentage": 0.3,
+                # "removal_percentage": 0.3,
+                "removal_percentage": 1.0,
             },
         },
         # Stage 2 configuration (GSparsity)
         "stage2": {
             "search": {
-                "epochs": search_epochs * 2 // 3,
+                # "epochs": search_epochs * 2 // 3,
+                "epochs": 2,  #! 1
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -415,8 +324,6 @@ optimizer_configs = {
                 "learning_rate": 0.001,
                 "momentum": 0.8,
                 "learning_rate_min": 0.0001,
-                "cutout": False,
-                "cutout_length": 16,
             },
         },
     },
@@ -429,11 +336,15 @@ optimizer_configs = {
             "learning_rate": 0.001,
             "learning_rate_min": 0.0001,
             "momentum": 0.8,
+            "cutout": False,
+            "cutout_length": 16,
+            # "cutout_prob":
         },
         # Stage 1 configuration (Inverted BANANAS)
         "stage1": {
             "search": {
-                "epochs": search_epochs // 3,
+                # "epochs": search_epochs // 3,
+                "epochs": search_epochs // 2,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -444,13 +355,15 @@ optimizer_configs = {
                 "num_arches_to_mutate": 1,
                 "max_mutations": 1,
                 "num_candidates": 100,
-                "removal_percentage": 0.3,
+                # "removal_percentage": 0.3,
+                "removal_percentage": 1.0,
             },
         },
         # Stage 2 configuration (ZCP GSparsity)
         "stage2": {
             "search": {
-                "epochs": search_epochs * 2 // 3,
+                # "epochs": search_epochs // 3,
+                "epochs": search_epochs // 2,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -459,13 +372,23 @@ optimizer_configs = {
                 "learning_rate": 0.001,
                 "momentum": 0.8,
                 "learning_rate_min": 0.0001,
-                "cutout": False,
-                "cutout_length": 16,
                 "zcp_method": zcp_method,
             },
         },
     },
 }
+
+
+def propagate_cutout(method_name):
+    base = optimizer_configs[method_name]["search"]
+    stage2 = optimizer_configs[method_name]["stage2"]["search"]
+    for param in ["cutout", "cutout_length", "cutout_prob"]:
+        if param in base:
+            stage2[param] = base[param]
+
+
+propagate_cutout("inverted_bananas_gsparsity")
+propagate_cutout("inverted_bananas_zcp_gsparsity")
 
 # Add common evaluation to all optimizer configs
 for opt in optimizer_configs:
@@ -552,6 +475,31 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     logger = setup_logger(config.save + "/log.log")
     logger.setLevel(logging.INFO)
 
+    # Configure the 'fvcore' logger to use the same file handler
+    # as the main application logger.
+    app_file_handler = None
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            app_file_handler = handler
+            break
+
+    if app_file_handler:
+        fvcore_logger = logging.getLogger("fvcore")
+        # Add the application's file handler to the fvcore logger
+        fvcore_logger.addHandler(app_file_handler)
+        # Set the level for the fvcore logger. INFO will capture INFO and WARNING messages.
+        fvcore_logger.setLevel(logging.INFO)
+        # Prevent fvcore messages from being propagated to ancestor loggers,
+        # as they are now explicitly handled by the app_file_handler.
+        # This helps avoid duplicate messages if the root logger also has handlers (e.g., console).
+        fvcore_logger.propagate = False
+    else:
+        # Log a warning if the file handler couldn't be found, as fvcore logs might not be saved.
+        logger.warning(
+            "Could not find FileHandler for the main logger. "
+            "Fvcore logs might not be written to the log file."
+        )
+
     # Log the configuration
     logger.info(f"Configuration is \n{config}")
 
@@ -630,13 +578,24 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     ]:
         from naslib.defaults.two_stage_trainer import Trainer
 
-        trainer = Trainer(optimizer, config, lightweight_output=True)
+        trainer = Trainer(optimizer, config, lightweight_output=False)
     else:
         from naslib.defaults.trainer import Trainer
 
-        trainer = Trainer(optimizer, config, lightweight_output=True)
+        trainer = Trainer(optimizer, config, lightweight_output=False)
 
-    trainer.search(report_incumbent=False)
+    search_resume_from = ""
+    eval_resume_from = ""
+    # global resume # Access the global resume flag from args
+    if resume:  # Use the global resume flag
+        search_resume_from = utils.get_last_checkpoint(config, search=True)
+        eval_resume_from = utils.get_last_checkpoint(config, search=False)
+        if search_resume_from:
+            logger.info(f"Resuming search from checkpoint: {search_resume_from}")
+        if eval_resume_from:
+            logger.info(f"Resuming evaluation from checkpoint: {eval_resume_from}")
+
+    trainer.search(resume_from=search_resume_from, report_incumbent=False)
 
     # Get the search trajectory
     search_trajectory = trainer.search_trajectory
@@ -644,15 +603,20 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     logger.info(f"Validation accuracies: {search_trajectory.valid_acc}")
 
     # Evaluate the best model found in search
+    # The search_model argument in evaluate will default to 'model_final.pth'
+    # from the search directory if not provided, which is suitable after a search.
     best_model_val_acc = trainer.evaluate(
-        dataset_api=dataset_api, metric=Metric.VAL_ACCURACY
+        dataset_api=dataset_api,
+        metric=Metric.VAL_ACCURACY,
+        resume_from=eval_resume_from,
     )
     logger.info(f"Best model validation accuracy: {best_model_val_acc}")
 
-    # Get the best model architecture
-    best_model = optimizer.get_final_architecture()
+    # Get the best model architectureP
+    # best_model = optimizer.get_final_architecture()
 
-    return search_trajectory, best_model, best_model_val_acc
+    # return search_trajectory, best_model, best_model_val_acc
+    return search_trajectory, best_model_val_acc
 
 
 def main():
@@ -681,7 +645,10 @@ def main():
         # Todo I want to save the search trajectory of each run
         # ! convert_naslib_nb201_to_str
         # Run the optimizer
-        search_trajectory, best_model, best_val_acc = run_optimizer(
+        # search_trajectory, best_model, best_val_acc = run_optimizer(
+        #     optimizer_type, search_space_type, valid_dataset, config, s
+        # )
+        search_trajectory, best_val_acc = run_optimizer(
             optimizer_type, search_space_type, valid_dataset, config, s
         )
 

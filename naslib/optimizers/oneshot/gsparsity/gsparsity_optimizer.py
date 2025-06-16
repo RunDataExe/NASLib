@@ -30,6 +30,7 @@ class GSparseOptimizer(MetaOptimizer):
     """
 
     mu = 0
+    using_step_function = True
 
     def __init__(
         self,
@@ -241,6 +242,7 @@ class GSparseOptimizer(MetaOptimizer):
                                     )
                                     ** 2
                                 ).item()
+                                # logger.info(f"Suboperation {j}")
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -262,6 +264,7 @@ class GSparseOptimizer(MetaOptimizer):
                                             )
                                             ** 2
                                         ).item()
+                                        # logger.info(f"Subsuboperation {k}")
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -276,6 +279,7 @@ class GSparseOptimizer(MetaOptimizer):
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2
                         edge.data.dimension[i] += size
+                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -404,6 +408,7 @@ class GSparseOptimizer(MetaOptimizer):
                                     )
                                     ** 2
                                 ).item()
+                                # logger.info(f"Suboperation {j}")
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -425,6 +430,7 @@ class GSparseOptimizer(MetaOptimizer):
                                             )
                                             ** 2
                                         ).item()
+                                        # logger.info(f"Subsuboperation {k}")
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -439,6 +445,7 @@ class GSparseOptimizer(MetaOptimizer):
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2
                         edge.data.dimension[i] += size
+                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -504,14 +511,16 @@ class GSparseOptimizer(MetaOptimizer):
         Return all objects that should be saved in a checkpoint during training.
 
         Will be called after `before_training` and must include key "model".
+        `op_optimizer_evaluate` is a class reference for evaluation, not a stateful
+        object during search, so it's not included here.
 
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
         return {
             "model": self.graph,
-            "op_optimizer": self.op_optimizer,
-            "op_optimizer_evaluate": self.op_optimizer_evaluate,
+            "op_optimizer": self.op_optimizer,  # This is an instance
+            # "op_optimizer_evaluate": self.op_optimizer_evaluate, # This is a CLASS, so don't save its state_dict
         }
 
 

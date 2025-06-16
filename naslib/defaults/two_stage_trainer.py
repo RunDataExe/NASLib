@@ -1,13 +1,13 @@
-import codecs
 from naslib.search_spaces.core.graph import Graph
 from naslib.utils.vis import plot_architectural_weights
-import time
-import json
-import logging
-import os
-import copy
-import torch
-import numpy as np
+import time  # Ensure time is imported
+import json  # Ensure json is imported
+import logging  # Ensure logging is imported
+import os  # Ensure os is imported
+import copy  # Ensure copy is imported
+import torch  # Ensure torch is imported
+import numpy as np  # Ensure numpy is imported
+import codecs  # Ensure codecs is imported
 
 from fvcore.common.checkpoint import PeriodicCheckpointer
 
@@ -45,13 +45,7 @@ class Trainer(object):
         """
         self.optimizer = optimizer
         self.config = config
-
-        if hasattr(optimizer, "get_total_epochs"):
-            self.epochs = optimizer.get_total_epochs()
-            logger.info(f"Trainer epochs set by optimizer: {self.epochs}")
-        else:
-            self.epochs = self.config.search.epochs
-            logger.info(f"Trainer epochs set by config: {self.epochs}")
+        self.epochs = 0  # Will be set after optimizer is potentially resumed
 
         self.lightweight_output = lightweight_output
 
@@ -68,8 +62,7 @@ class Trainer(object):
         self.val_top5 = utils.AverageMeter()
         self.val_loss = utils.AverageMeter()
 
-        n_parameters = optimizer.get_model_size()
-        # logger.info("param size = %fMB", n_parameters)
+        # n_parameters will be fetched after optimizer is adapted
         self.search_trajectory = utils.AttrDict(
             {
                 "train_acc": [],
@@ -81,9 +74,10 @@ class Trainer(object):
                 "runtime": [],
                 "train_time": [],
                 "arch_eval": [],
-                "params": n_parameters,
+                "params": 0.0,  # Will be updated
             }
         )
+        self.previous_optimizer_stage = -1  # For detecting stage transitions
 
     def search(
         self,
@@ -92,102 +86,286 @@ class Trainer(object):
         after_epoch: Callable[[int], None] = None,
         report_incumbent=True,
     ):
-        """
-        Start the architecture search.
-
-        Generates a json file with training statistics.
-
-        Args:
-            resume_from (str): Checkpoint file to resume from. If not given then
-                train from scratch.
-        """
         logger.info("Beginning search")
 
         np.random.seed(self.config.search.seed)
         torch.manual_seed(self.config.search.seed)
 
-        self.optimizer.before_training()
-        checkpoint_freq = self.config.search.checkpoint_freq
-        if self.optimizer.using_step_function:
-            self.scheduler = self.build_search_scheduler(
-                self.optimizer.op_optimizer, self.config
-            )
+        self.optimizer.before_training(resume_from_path=resume_from)
+        self.previous_optimizer_stage = self.optimizer.current_stage
 
-            start_epoch = self._setup_checkpointers(
-                resume_from, period=checkpoint_freq, scheduler=self.scheduler
-            )
+        if hasattr(self.optimizer, "get_total_epochs"):
+            self.epochs = self.optimizer.get_total_epochs()
+            logger.info(f"Trainer epochs set by optimizer: {self.epochs}")
+        else:
+            self.epochs = self.config.search.epochs
+            logger.info(f"Trainer epochs set by config: {self.epochs}")
+
+        if hasattr(self.optimizer, "get_model_size"):
+            n_parameters = self.optimizer.get_model_size()
+            self.search_trajectory.params = n_parameters
+            logger.info("param size = %fMB", n_parameters)
+
+        checkpoint_freq = self.config.search.checkpoint_freq
+
+        current_op_optimizer_for_scheduler = None
+        if self.optimizer.using_step_function:
+            if hasattr(self.optimizer, "get_op_optimizer"):
+                current_op_optimizer_for_scheduler = self.optimizer.get_op_optimizer()
+            elif hasattr(self.optimizer, "op_optimizer"):
+                current_op_optimizer_for_scheduler = self.optimizer.op_optimizer
+
+            if current_op_optimizer_for_scheduler:
+                scheduler_t_max = self.config.search.epochs
+                scheduler_lr_min = self.config.search.learning_rate_min
+
+                if hasattr(self.optimizer, "current_stage"):
+                    current_opt_stage = self.optimizer.current_stage
+                    if current_opt_stage == 2 and hasattr(
+                        self.optimizer, "stage2_epochs"
+                    ):
+                        scheduler_t_max = self.optimizer.stage2_epochs
+                        logger.info(
+                            f"Scheduler T_max for Stage 2 set to: {scheduler_t_max} (from optimizer.stage2_epochs)"
+                        )
+                        if (
+                            hasattr(self.optimizer, "stage2_config")
+                            and hasattr(self.optimizer.stage2_config, "search")
+                            and hasattr(
+                                self.optimizer.stage2_config.search, "learning_rate_min"
+                            )
+                        ):
+                            scheduler_lr_min = (
+                                self.optimizer.stage2_config.search.learning_rate_min
+                            )
+
+                _scheduler_config_for_setup = utils.AttrDict()
+                _scheduler_config_for_setup.search = utils.AttrDict()
+                _scheduler_config_for_setup.search.epochs = scheduler_t_max
+                _scheduler_config_for_setup.search.learning_rate_min = scheduler_lr_min
+
+                self.scheduler = self.build_search_scheduler(
+                    current_op_optimizer_for_scheduler,
+                    _scheduler_config_for_setup,
+                )
+                start_epoch = self._setup_checkpointers(
+                    resume_from,
+                    period=checkpoint_freq,
+                    scheduler=self.scheduler,
+                )
+            else:
+                logger.warning(
+                    "Optimizer uses step function but no op_optimizer found for scheduler. Scheduler not initialized for checkpointer."
+                )
+                start_epoch = self._setup_checkpointers(
+                    resume_from, period=checkpoint_freq
+                )
         else:
             start_epoch = self._setup_checkpointers(resume_from, period=checkpoint_freq)
 
-        if self.optimizer.using_step_function:
-            self.train_queue, self.valid_queue, _ = self.build_search_dataloaders(
-                self.config
-            )
-
-        arch_weights = []
-        for e in range(start_epoch, self.epochs):
-            start_time = time.time()
-            self.optimizer.new_epoch(e)
-
-            # Ensure dataloaders are initialized if optimizer transitions to using step function
-            if self.optimizer.using_step_function and (
-                not hasattr(self, "train_queue") or self.train_queue is None
-            ):
+        if start_epoch > 0:
+            errors_json_path = os.path.join(self.config.save, "errors.json")
+            if os.path.exists(errors_json_path):
                 logger.info(
-                    "Optimizer now uses step function, (re)initializing dataloaders for search."
+                    f"Resuming: Found existing errors.json at {errors_json_path}. Attempting to load previous trajectory."
+                )
+                try:
+                    with codecs.open(errors_json_path, "r", encoding="utf-8") as f:
+                        loaded_data = json.load(f)
+
+                    previous_trajectory_data = None
+                    if not self.lightweight_output:
+                        if isinstance(loaded_data, dict):
+                            previous_trajectory_data = loaded_data
+                        else:
+                            logger.warning(
+                                "Resuming: errors.json is not in the expected dict format for non-lightweight output. Skipping trajectory load."
+                            )
+                    else:  # lightweight_output is True
+                        if (
+                            isinstance(loaded_data, list)
+                            and len(loaded_data) == 2
+                            and isinstance(loaded_data[1], dict)
+                        ):
+                            previous_trajectory_data = loaded_data[
+                                1
+                            ]  # The trajectory dict
+                        else:
+                            logger.warning(
+                                "Resuming: errors.json is not in the expected list format for lightweight output. Skipping trajectory load."
+                            )
+
+                    if previous_trajectory_data:
+                        for (
+                            key,
+                            current_val_in_trajectory,
+                        ) in self.search_trajectory.items():
+                            if (
+                                isinstance(current_val_in_trajectory, list)
+                                and key in previous_trajectory_data
+                                and isinstance(previous_trajectory_data[key], list)
+                            ):
+                                # Load data for epochs 0 to start_epoch - 1
+                                self.search_trajectory[key] = previous_trajectory_data[
+                                    key
+                                ][:start_epoch]
+                                logger.info(
+                                    f"Resuming: Loaded {len(self.search_trajectory[key])} entries for trajectory key '{key}' from errors.json (expected up to {start_epoch})."
+                                )
+
+                        logger.info(
+                            f"Successfully processed previous search_trajectory from errors.json for resuming at epoch {start_epoch}."
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"Resuming: Failed to load or parse errors.json: {e}. Starting with a fresh trajectory for metrics."
+                    )
+            else:
+                logger.info(
+                    "Resuming: No existing errors.json found. Starting with a fresh trajectory for metrics."
+                )
+
+        if self.optimizer.using_step_function:
+            # Dataloaders might be (re)initialized if optimizer transitions stage later
+            if not hasattr(self, "train_queue") or self.train_queue is None:
+                logger.info(
+                    "Initializing dataloaders for search (step function detected)."
                 )
                 self.train_queue, self.valid_queue, _ = self.build_search_dataloaders(
                     self.config
                 )
-                # Also initialize scheduler if it wasn't initialized or needs re-initialization
-                # with the new op_optimizer from the current stage.
-                current_op_optimizer = self.optimizer.get_op_optimizer()
-                if current_op_optimizer is not None:
-                    # Create a config for the scheduler specific to stage 2's duration
-                    _config_for_scheduler = utils.AttrDict()
-                    _config_for_scheduler.search = utils.AttrDict()
 
-                    # stage2_epochs should be available from the optimizer instance
-                    if hasattr(self.optimizer, "stage2_epochs"):
-                        _config_for_scheduler.search.epochs = (
-                            self.optimizer.stage2_epochs
+        arch_weights = []
+        for e in range(start_epoch, self.epochs):
+            start_time = time.time()
+
+            # Store stage before new_epoch to detect transition
+            self.previous_optimizer_stage = self.optimizer.current_stage
+            self.optimizer.new_epoch(e)
+
+            # Check for stage transition after new_epoch()
+            if self.optimizer.current_stage == 2 and self.previous_optimizer_stage == 1:
+                logger.info(
+                    "Optimizer transitioned from Stage 1 to Stage 2. Updating checkpointer and scheduler if necessary."
+                )
+
+                # Get new checkpointables for Stage 2
+                stage2_checkpointables = self.optimizer.get_checkpointables()
+                model_for_stage2 = stage2_checkpointables.pop(
+                    "model"
+                )  # model is mandatory
+
+                # Prepare other checkpointables for the new Checkpointer instance
+                current_checkpointables_for_new_checkpointer = {}
+                current_checkpointables_for_new_checkpointer.update(
+                    stage2_checkpointables
+                )
+
+                # Handle scheduler: if stage 2 uses step function, and scheduler was re-initialized
+                if self.optimizer.using_step_function:
+                    logger.info(
+                        "Stage 2 uses step function. Ensuring scheduler is configured."
+                    )
+                    current_op_optimizer = None
+                    if hasattr(self.optimizer, "get_op_optimizer"):
+                        current_op_optimizer = self.optimizer.get_op_optimizer()
+                    elif hasattr(self.optimizer, "op_optimizer"):
+                        current_op_optimizer = self.optimizer.op_optimizer
+
+                    if current_op_optimizer is not None:
+                        _config_for_scheduler_transition = utils.AttrDict()
+                        _config_for_scheduler_transition.search = utils.AttrDict()
+
+                        # Determine T_max for stage 2 scheduler during transition
+                        stage2_scheduler_t_max = (
+                            self.config.search.epochs // 2
+                        )  # Default fallback
+                        stage2_scheduler_lr_min = self.config.search.learning_rate_min
+
+                        if hasattr(self.optimizer, "stage2_epochs"):
+                            stage2_scheduler_t_max = self.optimizer.stage2_epochs
+                        elif (
+                            hasattr(self.optimizer, "stage2_optimizer")
+                            and hasattr(self.optimizer.stage2_optimizer, "config")
+                            and hasattr(
+                                self.optimizer.stage2_optimizer.config, "search"
+                            )
+                            and hasattr(
+                                self.optimizer.stage2_optimizer.config.search, "epochs"
+                            )
+                        ):
+                            stage2_scheduler_t_max = (
+                                self.optimizer.stage2_optimizer.config.search.epochs
+                            )
+
+                        if (
+                            hasattr(self.optimizer, "stage2_config")
+                            and hasattr(self.optimizer.stage2_config, "search")
+                            and hasattr(
+                                self.optimizer.stage2_config.search, "learning_rate_min"
+                            )
+                        ):
+                            stage2_scheduler_lr_min = (
+                                self.optimizer.stage2_config.search.learning_rate_min
+                            )
+
+                        _config_for_scheduler_transition.search.epochs = (
+                            stage2_scheduler_t_max
+                        )
+                        _config_for_scheduler_transition.search.learning_rate_min = (
+                            stage2_scheduler_lr_min
+                        )
+
+                        self.scheduler = self.build_search_scheduler(
+                            current_op_optimizer, _config_for_scheduler_transition
+                        )
+                        logger.info(
+                            f"Scheduler re-initialized for Stage 2 with T_max={_config_for_scheduler_transition.search.epochs}."
+                        )
+                        # Add scheduler to the new checkpointer
+                        current_checkpointables_for_new_checkpointer["scheduler"] = (
+                            self.scheduler
                         )
                     else:
-                        # Fallback or error, though for Inverted_Bananas_GsparseOptimizer it should exist
-                        logger.warning(
-                            "optimizer.stage2_epochs not found, scheduler T_max might be incorrect for stage 2."
+                        logger.error(
+                            "Stage 2 uses step function, but op_optimizer not found for scheduler re-initialization."
                         )
-                        _config_for_scheduler.search.epochs = (
-                            self.config.search.epochs
-                        )  # Fallback to global
+                        self.scheduler = (
+                            None  # Explicitly set to None if it cannot be initialized
+                        )
 
-                    _config_for_scheduler.search.learning_rate_min = (
-                        self.config.search.learning_rate_min
-                    )
+                # Create and assign the new checkpointer
+                new_plain_checkpointer = utils.Checkpointer(
+                    model=model_for_stage2,
+                    save_dir=self.periodic_checkpointer.checkpointer.save_dir,  # Use same save_dir
+                    **current_checkpointables_for_new_checkpointer,
+                )
+                self.periodic_checkpointer.checkpointer = new_plain_checkpointer
+                logger.info(
+                    f"Checkpointer updated with Stage 2 objects: {list(new_plain_checkpointer.checkpointables.keys()) + ['model']}"
+                )
 
-                    self.scheduler = self.build_search_scheduler(
-                        current_op_optimizer, _config_for_scheduler
-                    )
-                    logger.info(
-                        f"Scheduler (re)initialized for step-based search with T_max={_config_for_scheduler.search.epochs}."
-                    )
-                else:
-                    # This case should ideally not happen if get_op_optimizer is implemented correctly
-                    # for optimizers that use a step function.
-                    logger.warning(
-                        "Optimizer is using step function, but get_op_optimizer() returned None. Scheduler not initialized."
-                    )
+            # Ensure dataloaders are initialized if optimizer transitions to using step function
+            # (This logic might be redundant if handled by stage transition above, but kept for safety)
+            if self.optimizer.using_step_function and (
+                not hasattr(self, "train_queue") or self.train_queue is None
+            ):
+                logger.info(
+                    "Optimizer now uses step function (checked post new_epoch), (re)initializing dataloaders for search."
+                )
+                self.train_queue, self.valid_queue, _ = self.build_search_dataloaders(
+                    self.config
+                )
+                # Scheduler re-initialization is handled in the stage transition block
 
             if self.optimizer.using_step_function:
                 # Ensure scheduler is available if we are in step-based mode
                 if not hasattr(self, "scheduler") or self.scheduler is None:
                     logger.error(
                         "Optimizer is using step function, but scheduler is not available. "
-                        "This will likely cause an error. Ensure get_op_optimizer() returns a valid optimizer "
-                        "for the current stage."
+                        "This will likely cause an error."
                     )
-                    # Depending on desired robustness, could raise an error here or attempt a last-minute init.
-                    # For now, let it proceed to hit the AttributeError to highlight the issue if the warning above was missed.
 
                 for step, data_train in enumerate(self.train_queue):
                     if self.config.save_arch_weights is True:
@@ -666,33 +844,63 @@ class Trainer(object):
             search (bool): Whether search or evaluation phase is checkpointed. This is required
                 because the files are in different folders to not be overridden
             add_checkpointables (object): Additional things to checkpoint together with the
-                optimizer's checkpointables.
+                optimizer's checkpointables. e.g. scheduler
         """
+        # Get checkpointables from optimizer (depends on current_stage, set in optimizer.before_training)
         checkpointables = self.optimizer.get_checkpointables()
-        checkpointables.update(add_checkpointables)
 
+        # Add any other objects passed directly (e.g., scheduler from the search method)
+        # Ensure no key collision, optimizer's take precedence if collision.
+        for key, obj in add_checkpointables.items():
+            if key not in checkpointables:
+                checkpointables[key] = obj
+            else:
+                logger.warning(
+                    f"Key '{key}' from add_checkpointables conflicts with optimizer's checkpointables. Optimizer's version will be used."
+                )
+
+        # The 'model' key is mandatory for fvcore.Checkpointer
+        model_object = checkpointables.pop("model", None)
+        if model_object is None:
+            # This case should ideally not happen if get_checkpointables is implemented correctly
+            logger.error(
+                "No 'model' found in optimizer's checkpointables. Checkpointer will likely fail."
+            )
+            # Fallback: use the optimizer itself as the model, though this might not be ideal.
+            model_object = self.optimizer
+
+        save_directory = os.path.join(self.config.save, "search" if search else "eval")
+
+        # The rest of checkpointables (excluding 'model') are passed as kwargs
         checkpointer = utils.Checkpointer(
-            model=checkpointables.pop("model"),
-            save_dir=self.config.save + "/search"
-            if search
-            else self.config.save + "/eval",
-            # **checkpointables #NOTE: this is throwing an Error
+            model=model_object,  # Main model object
+            save_dir=save_directory,
+            **checkpointables,  # Other objects like 'op_optimizer', 'scheduler', etc.
         )
 
         self.periodic_checkpointer = PeriodicCheckpointer(
             checkpointer,
             period=period,
-            max_iter=self.epochs  # Changed from self.config.search.epochs
-            if search
-            else self.config.evaluation.epochs,
+            max_iter=self.epochs,  # Uses self.epochs which is set considering optimizer's total_epochs
         )
 
-        if resume_from:
-            logger.info("loading model from file {}".format(resume_from))
+        if resume_from and os.path.exists(resume_from):  # Check if path exists
+            logger.info("Loading model from file {}".format(resume_from))
+            # resume_or_load will load into model_object and into objects in **checkpointables
             checkpoint = checkpointer.resume_or_load(resume_from, resume=True)
             if checkpointer.has_checkpoint():
-                return checkpoint.get("iteration", -1) + 1
-        return 0
+                # `iteration` here refers to the iteration count saved by fvcore, usually epoch number
+                loaded_epoch = checkpoint.get("iteration", -1)
+                logger.info(
+                    f"Resumed from checkpoint saved at iteration/epoch: {loaded_epoch}"
+                )
+                return loaded_epoch + 1
+        elif resume_from:
+            logger.warning(
+                f"Resume path {resume_from} provided but not found. Starting from scratch."
+            )
+
+        return 0  # Start from epoch 0 if not resuming or resume_from invalid
 
     def _log_to_json(self):
         """log training statistics to json file"""

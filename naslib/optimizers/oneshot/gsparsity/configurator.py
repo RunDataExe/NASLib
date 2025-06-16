@@ -95,6 +95,11 @@ zcp_method = args.zcp_method
 resume = args.resume
 
 
+# Maybe the problem is also related to the change of the logger in the configurator. As the statedict in the log says it is not complete thus the checkpoint after completing one epoch with gsparsity should also contain less. Or is this the case and my logging / printing information is just not nuanced enough to capture this?
+
+# have look at log.log file
+
+
 #! maybe use one epoch (bias towards early influencial hp) / or much less data and more epochs for hpo than check hpo importance and with that reduce search space to imporatant params use the paper that says one epoch is unreasonably good and optuna
 
 #! use logarithmic for left bounded [0,infinit]; [log a, log b] bischlHyperparameterOptimizationFoundations2021
@@ -227,7 +232,7 @@ optimizer_configs = {
     },
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,  # in paper 100
             "grad_clip": 0,  # in paper 0
             "weight_decay": 60,  # original 120 in paper 60
@@ -265,7 +270,7 @@ optimizer_configs = {
     },
     "inverted_bananas": {
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
@@ -281,7 +286,7 @@ optimizer_configs = {
     },
     "inverted_bananas_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
@@ -296,7 +301,7 @@ optimizer_configs = {
         "stage1": {
             "search": {
                 # "epochs": search_epochs // 3,
-                "epochs": 3,  #! 2
+                "epochs": 5,  #!
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -315,7 +320,7 @@ optimizer_configs = {
         "stage2": {
             "search": {
                 # "epochs": search_epochs * 2 // 3,
-                "epochs": 2,  #! 1
+                "epochs": 2,  #!
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -344,7 +349,7 @@ optimizer_configs = {
         "stage1": {
             "search": {
                 # "epochs": search_epochs // 3,
-                "epochs": search_epochs // 2,
+                "epochs": 1,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -363,7 +368,7 @@ optimizer_configs = {
         "stage2": {
             "search": {
                 # "epochs": search_epochs // 3,
-                "epochs": search_epochs // 2,
+                "epochs": 2,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -586,15 +591,40 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
 
     search_resume_from = ""
     eval_resume_from = ""
-    # global resume # Access the global resume flag from args
-    if resume:  # Use the global resume flag
-        search_resume_from = utils.get_last_checkpoint(config, search=True)
-        eval_resume_from = utils.get_last_checkpoint(config, search=False)
-        if search_resume_from:
-            logger.info(f"Resuming search from checkpoint: {search_resume_from}")
-        if eval_resume_from:
-            logger.info(f"Resuming evaluation from checkpoint: {eval_resume_from}")
+    # # # global resume # Access the global resume flag from args
+    # if resume:  # Use the global resume flag
+    #     search_resume_from = utils.get_last_checkpoint(config, search=True)
+    #     eval_resume_from = utils.get_last_checkpoint(config, search=False)
+    #     if search_resume_from:
+    #         logger.info(f"Resuming search from checkpoint: {search_resume_from}")
+    #     if eval_resume_from:
+    #         logger.info(f"Resuming evaluation from checkpoint: {eval_resume_from}")
 
+    # trainer.search(resume_from=search_resume_from, report_incumbent=False)
+
+    if resume:
+        search_resume_from = utils.get_last_checkpoint(config, search=True)
+        logger.info(
+            f"RunOptimizer: utils.get_last_checkpoint(search=True) returned: '{search_resume_from}'"
+        )
+        eval_resume_from = utils.get_last_checkpoint(config, search=False)
+        logger.info(
+            f"RunOptimizer: utils.get_last_checkpoint(search=False) returned: '{eval_resume_from}'"
+        )
+        if search_resume_from:
+            logger.info(
+                f"RunOptimizer: Attempting to resume search from checkpoint: {search_resume_from}"
+            )
+        if eval_resume_from:
+            logger.info(
+                f"RunOptimizer: Attempting to resume evaluation from checkpoint: {eval_resume_from}"
+            )
+    else:
+        logger.info("RunOptimizer: Not resuming (config_node_arg.resume is False).")
+
+    logger.info(
+        f"RunOptimizer: Passing resume_from='{search_resume_from}' to trainer.search()"
+    )
     trainer.search(resume_from=search_resume_from, report_incumbent=False)
 
     # Get the search trajectory

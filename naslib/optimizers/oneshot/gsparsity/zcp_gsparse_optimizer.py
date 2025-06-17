@@ -34,6 +34,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
     """
 
     mu = 0
+    using_step_function = True
 
     def __init__(
         self,
@@ -634,7 +635,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         return {
             "model": self.graph,
             "op_optimizer": self.op_optimizer,
-            "op_optimizer_evaluate": self.op_optimizer_evaluate,
+            # "op_optimizer_evaluate": self.op_optimizer_evaluate,
         }
 
 

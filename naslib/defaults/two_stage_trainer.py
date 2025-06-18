@@ -117,7 +117,7 @@ class Trainer(object):
 
             if current_op_optimizer_for_scheduler:
                 scheduler_t_max = self.config.search.epochs
-                scheduler_lr_min = self.config.search.learning_rate_min
+                scheduler_lr_min = self.config.stage2.search.learning_rate_min
 
                 if hasattr(self.optimizer, "current_stage"):
                     current_opt_stage = self.optimizer.current_stage
@@ -276,12 +276,6 @@ class Trainer(object):
                     if current_op_optimizer is not None:
                         _config_for_scheduler_transition = utils.AttrDict()
                         _config_for_scheduler_transition.search = utils.AttrDict()
-
-                        # Determine T_max for stage 2 scheduler during transition
-                        stage2_scheduler_t_max = (
-                            self.config.search.epochs // 2
-                        )  # Default fallback
-                        stage2_scheduler_lr_min = self.config.search.learning_rate_min
 
                         if hasattr(self.optimizer, "stage2_epochs"):
                             stage2_scheduler_t_max = self.optimizer.stage2_epochs

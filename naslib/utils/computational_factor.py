@@ -308,14 +308,14 @@ def main(args):
                 val_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=0,
+                num_workers=16,
                 pin_memory=True,
             )
             test_queue_final = DataLoader(
                 test_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=0,
+                num_workers=16,
                 pin_memory=True,
             )
 
@@ -355,14 +355,14 @@ def main(args):
                 val_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=0,
+                num_workers=16,
                 pin_memory=True,
             )
             test_queue_final = DataLoader(
                 test_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=0,
+                num_workers=16,
                 pin_memory=True,
             )
 

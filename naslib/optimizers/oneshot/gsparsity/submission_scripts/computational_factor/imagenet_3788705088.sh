@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=02:30:00
+#SBATCH --time=03:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=gpu_a100_il
@@ -16,7 +16,7 @@ mkdir -p naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_fa
 
 python naslib/utils/computational_factor.py \
     --dataset ImageNet16-120 \
-    --num_archs 10 \
+    --num_archs 1 \
     --epochs 200 \
     --batch_size 256 \
     --seed 3788705088 \

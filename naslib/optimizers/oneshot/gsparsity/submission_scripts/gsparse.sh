@@ -5,7 +5,7 @@
 #SBATCH --partition=gpu_a100_il
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --job-name=group_sparsity_nas/gs_original
 #SBATCH --output=naslib/optimizers/oneshot/gsparsity/run/group_sparsity_nas_original.out
 #SBATCH --mail-type=BEGIN,END,FAIL

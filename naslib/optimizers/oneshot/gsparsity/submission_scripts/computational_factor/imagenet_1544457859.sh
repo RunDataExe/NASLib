@@ -5,7 +5,7 @@
 #SBATCH --partition=gpu_a100_il
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --job-name=comp_factor_imagenet16_120
 #SBATCH --output=experiments/comp_factor_naslib/ImageNet16-120/slurm_comp_factor_imagenet16_120_%j.out
 #SBATCH --mail-type=BEGIN,END,FAIL

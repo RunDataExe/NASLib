@@ -10,6 +10,22 @@ from .taskonomy_dataset import get_datasets
 from . import load_ops
 
 
+class WorkerInitializer:
+    """
+    Callable class to initialize worker processes with different seeds.
+    This is necessary to make the seeding picklable for multiprocessing.
+    """
+
+    def __init__(self, seed, is_train=False):
+        self.seed = seed
+        self.is_train = is_train
+
+    def __call__(self, worker_id):
+        # The +1 for the train_queue is to have different seeds for train and val/test.
+        worker_seed = self.seed + worker_id + (1 if self.is_train else 0)
+        np.random.seed(worker_seed)
+
+
 def get_project_root() -> Path:
     """
     Returns the root path of the project.
@@ -177,33 +193,62 @@ def get_train_val_loaders(config, mode="train"):
     indices = list(range(num_train))
     split = int(np.floor(train_portion * num_train))
 
+    num_workers = 16
+    train_init_fn = WorkerInitializer(seed, is_train=True)
+    val_test_init_fn = WorkerInitializer(seed, is_train=False)
+
     train_queue = torch.utils.data.DataLoader(
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-        pin_memory=True,
-        num_workers=16,
-        worker_init_fn=np.random.seed(seed + 1),
+        pin_memory=False,
+        num_workers=num_workers,
+        worker_init_fn=train_init_fn,
     )
 
     valid_queue = torch.utils.data.DataLoader(
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
-        pin_memory=True,
-        num_workers=16,
-        worker_init_fn=np.random.seed(seed),
+        pin_memory=False,
+        num_workers=num_workers,
+        worker_init_fn=val_test_init_fn,
     )
 
     test_queue = torch.utils.data.DataLoader(
         test_data,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
-        num_workers=16,
-        worker_init_fn=np.random.seed(seed),
+        pin_memory=False,
+        num_workers=num_workers,
+        worker_init_fn=val_test_init_fn,
     )
+    # train_queue = torch.utils.data.DataLoader(
+    #     train_data,
+    #     batch_size=batch_size,
+    #     sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
+    #     pin_memory=True,
+    #     num_workers=0,
+    #     worker_init_fn=np.random.seed(seed),
+    # )
 
+    # valid_queue = torch.utils.data.DataLoader(
+    #     train_data,
+    #     batch_size=batch_size,
+    #     sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
+    #     pin_memory=True,
+    #     num_workers=0,
+    #     worker_init_fn=np.random.seed(seed),
+    # )
+
+    # test_queue = torch.utils.data.DataLoader(
+    #     test_data,
+    #     batch_size=batch_size,
+    #     shuffle=False,
+    #     pin_memory=True,
+    #     num_workers=0,
+    #     worker_init_fn=np.random.seed(seed),
+    # )
     return train_queue, valid_queue, test_queue, train_transform, valid_transform
 
 

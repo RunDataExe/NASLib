@@ -65,6 +65,12 @@ def parse_log_file(log_path, seed):
         if queried_train_time > 1e-6:
             computational_factor = local_train_time / queried_train_time
 
+        # Calculate part time and its computational factor
+        part_time_queried = queried_train_time * 200
+        part_time_computational_factor = -1.0
+        if part_time_queried > 1e-6:
+            part_time_computational_factor = local_train_time / part_time_queried
+
         # Assemble the result dictionary
         result = {
             "op_indices": op_indices,
@@ -77,6 +83,8 @@ def parse_log_file(log_path, seed):
             "local_val_acc": local_val_acc,
             "local_test_acc": local_test_acc,
             "computational_factor": computational_factor,
+            "part_time_queried": part_time_queried,
+            "part_time_computational_factor": part_time_computational_factor,
             "seed_of_run": int(seed),
         }
         return result
@@ -157,9 +165,40 @@ def main(target_dir):
     else:
         logging.warning("No valid computational factors found to calculate statistics.")
 
+    # --- Summary for Part-Time Computational Factor ---
+    all_part_time_factors = [
+        r["part_time_computational_factor"]
+        for r in all_results
+        if r.get("part_time_computational_factor", -1) > 0
+    ]
+
+    part_time_factor_summary = {}
+    if all_part_time_factors:
+        part_time_factor_summary = {
+            "average": np.mean(all_part_time_factors),
+            "std_dev": np.std(all_part_time_factors),
+            "min": np.min(all_part_time_factors),
+            "max": np.max(all_part_time_factors),
+            "count": len(all_part_time_factors),
+            "all_factors": all_part_time_factors,
+        }
+        logging.info(
+            "Calculated summary statistics for part-time computational factors:"
+        )
+        logging.info(f"  Average: {part_time_factor_summary['average']:.4f}")
+        logging.info(f"  Std Dev: {part_time_factor_summary['std_dev']:.4f}")
+        logging.info(f"  Min: {part_time_factor_summary['min']:.4f}")
+        logging.info(f"  Max: {part_time_factor_summary['max']:.4f}")
+        logging.info(f"  Count: {part_time_factor_summary['count']}")
+    else:
+        logging.warning(
+            "No valid part-time computational factors found to calculate statistics."
+        )
+
     # --- Summary for Queried vs. Local Metrics ---
     metrics_to_summarize = {
         "train_time": ("queried_train_time", "local_train_time"),
+        "part_time": ("part_time_queried", "local_train_time"),
         "train_acc": ("queried_train_acc", "local_train_acc"),
         "val_acc": ("queried_val_acc", "local_val_acc"),
         "test_acc": ("queried_test_acc", "local_test_acc"),
@@ -196,7 +235,11 @@ def main(target_dir):
                 )
 
     # Combine all summaries into a single object
-    final_summary = {"computational_factor": factor_summary, **metrics_summary}
+    final_summary = {
+        "computational_factor": factor_summary,
+        "part_time_computational_factor": part_time_factor_summary,
+        **metrics_summary,
+    }
 
     # Combine results and summary into a single object
     final_output = {"summary": final_summary, "results": all_results}
@@ -217,9 +260,10 @@ if __name__ == "__main__":
         description="Reconstructs results.json from log files in subdirectories."
     )
     parser.add_argument(
-        "target_dir",
+        "--target_dir",
         type=str,
         help="The directory containing the experiment subdirectories (e.g., .../cifar10).",
+        required=True,
     )
     args = parser.parse_args()
 

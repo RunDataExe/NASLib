@@ -237,6 +237,15 @@ class Trainer(object):
                 self.train_queue, self.valid_queue, _ = self.build_search_dataloaders(
                     self.config
                 )
+                # Preload validation data to avoid multi-worker iterator deadlocks
+                logger.info("Preloading validation data into a list.")
+                self.valid_data_list = [
+                    (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
+                    for d in self.valid_queue
+                ]
+                logger.info(
+                    f"Preloaded {len(self.valid_data_list)} validation batches."
+                )
 
         arch_weights = []
         for e in range(start_epoch, self.epochs):
@@ -353,6 +362,15 @@ class Trainer(object):
                 self.train_queue, self.valid_queue, _ = self.build_search_dataloaders(
                     self.config
                 )
+                # Preload validation data to avoid multi-worker iterator deadlocks
+                logger.info("Preloading validation data into a list.")
+                self.valid_data_list = [
+                    (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
+                    for d in self.valid_queue
+                ]
+                logger.info(
+                    f"Preloaded {len(self.valid_data_list)} validation batches."
+                )
                 # Scheduler re-initialization is handled in the stage transition block
 
             if self.optimizer.using_step_function:
@@ -363,7 +381,7 @@ class Trainer(object):
                         "This will likely cause an error."
                     )
 
-                valid_iterator = iter(self.valid_queue)
+                valid_iterator = iter(self.valid_data_list)
                 for step, data_train in enumerate(self.train_queue):
                     if self.config.save_arch_weights is True:
                         if len(arch_weights) == 0:
@@ -390,12 +408,8 @@ class Trainer(object):
                     try:
                         data_val = next(valid_iterator)
                     except StopIteration:
-                        valid_iterator = iter(self.valid_queue)
+                        valid_iterator = iter(self.valid_data_list)
                         data_val = next(valid_iterator)
-                    data_val = (
-                        data_val[0].to(self.device),
-                        data_val[1].to(self.device, non_blocking=True),
-                    )
 
                     stats = self.optimizer.step(data_train, data_val)
                     logits_train, logits_val, train_loss, val_loss = stats

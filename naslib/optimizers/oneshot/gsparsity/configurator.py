@@ -38,7 +38,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity)",
+    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -99,6 +99,8 @@ resume = args.resume
 
 # have look at log.log file
 
+
+#! use computational factor for every time that is querried (multi shot and two stage)
 
 #! maybe use one epoch (bias towards early influencial hp) / or much less data and more epochs for hpo than check hpo importance and with that reduce search space to imporatant params use the paper that says one epoch is unreasonably good and optuna
 
@@ -162,10 +164,17 @@ evaluation = {
 }
 
 optimizer_configs = {
-    "rs": {
+    "rs": {  #! has to be allowed to run longer to compensate for the hpo e.g. give runtime or maybe use time per epoch to calculate how many more epochs per dataset it should be allowed to run and check back if it went over the budget if it did remove till in budget
         "search": {
             "checkpoint_freq": 5,
             "epochs": search_epochs,
+            "fidelity": -1,
+        },
+    },
+    "random_sampling": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": 1,
             "fidelity": -1,
         },
     },
@@ -183,10 +192,10 @@ optimizer_configs = {
             "k": 10,
             "num_init": 10,
             "num_ensemble": 5,
-            "predictor_type": "mlp",
-            "acq_fn_type": "its",
-            "acq_fn_optimization": "mutation",
-            "encoding_type": "path",
+            "predictor_type": "mlp",  # ["bananas", "bayes_lin_reg", "bohamiann", "bonas", "dngo", "lgb", "gcn", "gp", "gpwl", "mlp", "nao", "ngb", "rf", "seminas", "sparse_gp", "var_sparse_gp", "xgb", "omni_ngb", "omni_seminas"]
+            "acq_fn_type": "its",  # ["its", "ucb", "ei", "exploit_only"]
+            "acq_fn_optimization": "mutation",  # ["mutation", "random_sampling"]
+            "encoding_type": None,  #! not used predictor_type also specifies the encoding_type
             "num_arches_to_mutate": 1,
             "max_mutations": 1,
             "num_candidates": 100,  # no correspondance but resonable value for aquisition function
@@ -286,13 +295,10 @@ optimizer_configs = {
     },
     "inverted_bananas_gsparsity": {
         "search": {
-            "checkpoint_freq": 5,  #!
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
-            "learning_rate": 0.001,
-            "learning_rate_min": 0.0001,
-            "momentum": 0.8,
             "cutout": False,
             "cutout_length": 16,
             # "cutout_prob":
@@ -300,8 +306,8 @@ optimizer_configs = {
         # Stage 1 configuration (Inverted BANANAS)
         "stage1": {
             "search": {
-                # "epochs": search_epochs // 3,
-                "epochs": 5,  #!
+                # "epochs": search_epochs // 3,  #!
+                "epochs": 5,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -319,28 +325,25 @@ optimizer_configs = {
         # Stage 2 configuration (GSparsity)
         "stage2": {
             "search": {
-                # "epochs": search_epochs * 2 // 3,
-                "epochs": 2,  #!
+                # "epochs": search_epochs * 2 // 3,  #!
+                "epochs": 4,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
-                "normalization": "div",
+                "normalization": "div",  # ["none", "mul", "div"]
                 "normalization_exponent": 0.5,
                 "learning_rate": 0.001,
                 "momentum": 0.8,
                 "learning_rate_min": 0.0001,
             },
         },
-    },
+    },  #! problem when stage 1 complete but stage 2 epoch 0 not complete yet and I want to resume
     "inverted_bananas_zcp_gsparsity": {
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
-            "learning_rate": 0.001,
-            "learning_rate_min": 0.0001,
-            "momentum": 0.8,
             "cutout": False,
             "cutout_length": 16,
             # "cutout_prob":
@@ -348,8 +351,8 @@ optimizer_configs = {
         # Stage 1 configuration (Inverted BANANAS)
         "stage1": {
             "search": {
-                # "epochs": search_epochs // 3,
-                "epochs": 1,
+                # "epochs": search_epochs // 3, #!
+                "epochs": 5,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -367,7 +370,7 @@ optimizer_configs = {
         # Stage 2 configuration (ZCP GSparsity)
         "stage2": {
             "search": {
-                # "epochs": search_epochs // 3,
+                # "epochs": search_epochs // 3, #!
                 "epochs": 2,
                 "grad_clip": 0,
                 "weight_decay": 60,
@@ -383,17 +386,6 @@ optimizer_configs = {
     },
 }
 
-
-def propagate_cutout(method_name):
-    base = optimizer_configs[method_name]["search"]
-    stage2 = optimizer_configs[method_name]["stage2"]["search"]
-    for param in ["cutout", "cutout_length", "cutout_prob"]:
-        if param in base:
-            stage2[param] = base[param]
-
-
-propagate_cutout("inverted_bananas_gsparsity")
-propagate_cutout("inverted_bananas_zcp_gsparsity")
 
 # Add common evaluation to all optimizer configs
 for opt in optimizer_configs:
@@ -527,7 +519,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     dataset_api = get_dataset_api(search_space_type, dataset)
 
     # Instantiate the optimizer
-    if optimizer_type == "rs":
+    if optimizer_type == "rs" or optimizer_type == "random_sampling":
         optimizer = RandomSearch(config)
     elif optimizer_type == "ls":
         optimizer = LocalSearch(config)
@@ -558,7 +550,13 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         optimizer.adapt_search_space(
             search_space=search_space, train_loader=train_loader
         )
-    elif optimizer_type in ["rs", "ls", "bananas", "inverted_bananas"]:
+    elif optimizer_type in [
+        "rs",
+        "ls",
+        "bananas",
+        "inverted_bananas",
+        "random_sampling",
+    ]:
         optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api)
     elif optimizer_type in [
         "inverted_bananas_gsparsity",
@@ -581,11 +579,13 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
     ]:
-        from naslib.defaults.two_stage_trainer import Trainer
+        # from naslib.defaults.two_stage_trainer import Trainer
+        from naslib.defaults.two_stage_trainer_multi_dataloading_workers import Trainer
 
         trainer = Trainer(optimizer, config, lightweight_output=False)
     else:
-        from naslib.defaults.trainer import Trainer
+        # from naslib.defaults.trainer import Trainer
+        from naslib.defaults.trainer_multi_dataloading_workers import Trainer
 
         trainer = Trainer(optimizer, config, lightweight_output=False)
 

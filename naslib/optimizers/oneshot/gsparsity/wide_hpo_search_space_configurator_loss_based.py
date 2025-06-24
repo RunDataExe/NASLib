@@ -287,14 +287,18 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "acq_fn_type": trial.suggest_categorical(
                         "ibg_s1_acq_fn_type", ["its", "ucb", "ei"]
                     ),
-                    "acq_fn_optimization": "mutation",
-                    "encoding_type": None,
-                    "num_arches_to_mutate": 1,
-                    "max_mutations": 1,
-                    "num_candidates": 100,
-                    "removal_percentage": trial.suggest_float(
-                        "ibg_s1_removal_percentage", 0.5, 1.0
+                    "acq_fn_optimization": trial.suggest_categorical(
+                        "ibg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
                     ),
+                    "encoding_type": None,  # is useless as its set by the predictor type
+                    "num_arches_to_mutate": trial.suggest_int(
+                        "ibg_s1_num_arches_to_mutate", 1, 5
+                    ),
+                    "max_mutations": trial.suggest_int("ibg_s1_max_mutations", 1, 3),
+                    "num_candidates": trial.suggest_int(
+                        "ibg_s1_num_candidates", 50, 200
+                    ),
+                    "removal_percentage": 1.0,
                 },
             },
             # Stage 2 configuration (GSparsity)
@@ -349,14 +353,18 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "acq_fn_type": trial.suggest_categorical(
                         "ibzg_s1_acq_fn_type", ["its", "ucb", "ei"]
                     ),
-                    "acq_fn_optimization": "mutation",
-                    "encoding_type": "path",
-                    "num_arches_to_mutate": 1,
-                    "max_mutations": 1,
-                    "num_candidates": 100,
-                    "removal_percentage": trial.suggest_float(
-                        "ibzg_s1_removal_percentage", 0.5, 1.0
+                    "acq_fn_optimization": trial.suggest_categorical(
+                        "ibzg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
                     ),
+                    "encoding_type": None,  # is useless as its set by the predictor type
+                    "num_arches_to_mutate": trial.suggest_int(
+                        "ibzg_s1_num_arches_to_mutate", 1, 5
+                    ),
+                    "max_mutations": trial.suggest_int("ibzg_s1_max_mutations", 1, 3),
+                    "num_candidates": trial.suggest_int(
+                        "ibzg_s1_num_candidates", 50, 200
+                    ),
+                    "removal_percentage": 1.0,
                 },
             },
             # Stage 2 configuration (ZCP GSparsity)
@@ -780,7 +788,7 @@ def main():
 
     # Start optimization
     try:
-        study.optimize(objective, timeout=600)
+        study.optimize(objective, timeout=10800)
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 

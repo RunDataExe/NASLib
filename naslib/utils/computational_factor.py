@@ -24,6 +24,7 @@ from torch.optim.sgd import SGD
 # Add for manual splitting
 from torch.utils.data import Subset, DataLoader
 
+
 # Basic configuration template
 config_template = {
     "dataset": "cifar10",
@@ -68,7 +69,7 @@ def main(args):
     results_json_path = os.path.join(results_dir, "results.json")
 
     logger = setup_logger(os.path.join(log_dir, "log.log"))
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)  # INFO / DEBUG
     logger.info(f"Script arguments: {args}")
     logger.info(f"Logging to: {os.path.join(log_dir, 'log.log')}")
     logger.info(f"Results will be saved to/appended to: {results_json_path}")
@@ -310,6 +311,9 @@ def main(args):
                 shuffle=False,
                 num_workers=16,
                 pin_memory=True,
+                worker_init_fn=lambda worker_id: np.random.seed(
+                    cfg.seed + 1 + worker_id
+                ),
             )
             test_queue_final = DataLoader(
                 test_subset,
@@ -317,6 +321,9 @@ def main(args):
                 shuffle=False,
                 num_workers=16,
                 pin_memory=True,
+                worker_init_fn=lambda worker_id: np.random.seed(
+                    cfg.seed + 1 + worker_id
+                ),
             )
 
             logger.info(
@@ -357,6 +364,9 @@ def main(args):
                 shuffle=False,
                 num_workers=16,
                 pin_memory=True,
+                worker_init_fn=lambda worker_id: np.random.seed(
+                    cfg.seed + 1 + worker_id
+                ),
             )
             test_queue_final = DataLoader(
                 test_subset,
@@ -364,6 +374,9 @@ def main(args):
                 shuffle=False,
                 num_workers=16,
                 pin_memory=True,
+                worker_init_fn=lambda worker_id: np.random.seed(
+                    cfg.seed + 1 + worker_id
+                ),
             )
 
             logger.info(
@@ -427,10 +440,9 @@ def main(args):
                 train_loss_meter.update(loss.item(), input_train.size(0))
                 train_acc_meter.update(prec1.item(), input_train.size(0))
 
-                if step % args.log_freq == 0 and step > 0:
-                    logger.debug(
-                        f"  Arch {i + 1} Epoch {epoch}/{cfg.evaluation.epochs - 1}, Step {step}/{len(train_queue_final) - 1}, TrainLoss: {train_loss_meter.avg:.4f}, TrainAcc: {train_acc_meter.avg:.4f}"  # Use final queue
-                    )
+                logger.debug(
+                    f"  Arch {i + 1} Epoch {epoch}/{cfg.evaluation.epochs - 1}, Step {step}/{len(train_queue_final) - 1}, TrainLoss: {train_loss_meter.avg:.4f}, TrainAcc: {train_acc_meter.avg:.4f}"  # Use final queue
+                )
 
             final_train_acc_local = train_acc_meter.avg
 

@@ -33,7 +33,7 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent
 
 
-def get_train_val_loaders(config, mode="train"):
+def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4):
     """
     Constructs the dataloaders and transforms for training, validation and test data.
     """
@@ -193,7 +193,6 @@ def get_train_val_loaders(config, mode="train"):
     indices = list(range(num_train))
     split = int(np.floor(train_portion * num_train))
 
-    num_workers = 16
     train_init_fn = WorkerInitializer(seed, is_train=True)
     val_test_init_fn = WorkerInitializer(seed, is_train=False)
 
@@ -201,8 +200,8 @@ def get_train_val_loaders(config, mode="train"):
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-        pin_memory=False,
-        num_workers=num_workers,
+        pin_memory=True,
+        num_workers=train_workers,
         worker_init_fn=train_init_fn,
     )
 
@@ -210,8 +209,8 @@ def get_train_val_loaders(config, mode="train"):
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
-        pin_memory=False,
-        num_workers=num_workers,
+        pin_memory=True,
+        num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
     )
 
@@ -219,8 +218,8 @@ def get_train_val_loaders(config, mode="train"):
         test_data,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=False,
-        num_workers=num_workers,
+        pin_memory=True,
+        num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
     )
     # train_queue = torch.utils.data.DataLoader(

@@ -166,7 +166,7 @@ evaluation = {
 optimizer_configs = {
     "rs": {  #! has to be allowed to run longer to compensate for the hpo e.g. give runtime or maybe use time per epoch to calculate how many more epochs per dataset it should be allowed to run and check back if it went over the budget if it did remove till in budget
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,
             "fidelity": -1,
         },
@@ -241,7 +241,7 @@ optimizer_configs = {
     },
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
-            "checkpoint_freq": 5,  #!
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,  # in paper 100
             "grad_clip": 0,  # in paper 0
             "weight_decay": 60,  # original 120 in paper 60
@@ -260,7 +260,7 @@ optimizer_configs = {
     },
     "zcp_gsparsity": {
         "search": {
-            "checkpoint_freq": 5,
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,
             "grad_clip": 0,
             "weight_decay": 60,
@@ -279,7 +279,7 @@ optimizer_configs = {
     },
     "inverted_bananas": {
         "search": {
-            "checkpoint_freq": 5,  #!
+            "checkpoint_freq": 1,  #!
             "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
@@ -404,6 +404,35 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
     ):
         config.save_arch_weights = False
+    comp_factor_path = os.path.join(
+        "naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_factor",
+        dataset,
+        "results.json",
+    )
+    comp_factor = 1.0  # Default value
+    if os.path.exists(comp_factor_path):
+        try:
+            with open(comp_factor_path, "r") as f:
+                data = json.load(f)
+                comp_factor = data["summary"]["part_time_computational_factor"][
+                    "average"
+                ]
+            logging.info(f"Loaded computational factor {comp_factor} for {dataset}")
+        except Exception as e:
+            logging.warning(
+                f"Warning: Could not load computational factor from {comp_factor_path}. Using default {comp_factor}. Error: {e}"
+            )
+    else:
+        logging.warning(
+            f"Warning: Computational factor file not found at {comp_factor_path}. Using default {comp_factor}."
+        )
+    config.search.comp_factor = comp_factor
+
+    # Set the number of epochs to scale queried time by (e.g., NB201 archs are trained for 200 epochs)
+    if search_space_type == "nasbench201":
+        config.search.scaling_factor_epochs = 200
+    else:
+        config.search.scaling_factor_epochs = 1  # Default for other search spaces
 
     config.dataset = dataset
 
@@ -546,7 +575,9 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     elif optimizer_type == "gsparsity":
         optimizer.adapt_search_space(search_space=search_space)
     elif optimizer_type == "zcp_gsparsity":
-        train_loader, _, _, _, _ = get_train_val_loaders(config)
+        train_loader, _, _, _, _ = get_train_val_loaders(
+            config, train_workers=0, val_workers=0
+        )
         optimizer.adapt_search_space(
             search_space=search_space, train_loader=train_loader
         )
@@ -565,7 +596,9 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         # For two-stage optimizers
         train_loader = None
         if "zcp" in optimizer_type:
-            train_loader, _, _, _, _ = get_train_val_loaders(config)
+            train_loader, _, _, _, _ = get_train_val_loaders(
+                config, train_workers=0, val_workers=0
+            )
         optimizer.adapt_search_space(
             search_space=search_space,
             dataset_api=dataset_api,

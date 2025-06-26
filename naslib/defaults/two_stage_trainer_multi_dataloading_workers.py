@@ -238,14 +238,14 @@ class Trainer(object):
                     self.config
                 )
                 # Preload validation data to avoid multi-worker iterator deadlocks
-                logger.info("Preloading validation data into a list.")
-                self.valid_data_list = [
-                    (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
-                    for d in self.valid_queue
-                ]
-                logger.info(
-                    f"Preloaded {len(self.valid_data_list)} validation batches."
-                )
+                # logger.info("Preloading validation data into a list.")
+                # self.valid_data_list = [
+                #     (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
+                #     for d in self.valid_queue
+                # ]
+                # logger.info(
+                #     f"Preloaded {len(self.valid_data_list)} validation batches."
+                # )
 
         arch_weights = []
         for e in range(start_epoch, self.epochs):
@@ -363,14 +363,14 @@ class Trainer(object):
                     self.config
                 )
                 # Preload validation data to avoid multi-worker iterator deadlocks
-                logger.info("Preloading validation data into a list.")
-                self.valid_data_list = [
-                    (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
-                    for d in self.valid_queue
-                ]
-                logger.info(
-                    f"Preloaded {len(self.valid_data_list)} validation batches."
-                )
+                # logger.info("Preloading validation data into a list.")
+                # self.valid_data_list = [
+                #     (d[0].to(self.device), d[1].to(self.device, non_blocking=True))
+                #     for d in self.valid_queue
+                # ]
+                # logger.info(
+                #     f"Preloaded {len(self.valid_data_list)} validation batches."
+                # )
                 # Scheduler re-initialization is handled in the stage transition block
 
             if self.optimizer.using_step_function:
@@ -381,7 +381,7 @@ class Trainer(object):
                         "This will likely cause an error."
                     )
 
-                valid_iterator = iter(self.valid_data_list)
+                valid_iterator = iter(self.valid_queue)
                 for step, data_train in enumerate(self.train_queue):
                     if self.config.save_arch_weights is True:
                         if len(arch_weights) == 0:
@@ -408,9 +408,13 @@ class Trainer(object):
                     try:
                         data_val = next(valid_iterator)
                     except StopIteration:
-                        valid_iterator = iter(self.valid_data_list)
+                        valid_iterator = iter(self.valid_queue)
                         data_val = next(valid_iterator)
 
+                    data_val = (
+                        data_val[0].to(self.device),
+                        data_val[1].to(self.device, non_blocking=True),
+                    )
                     stats = self.optimizer.step(data_train, data_val)
                     logits_train, logits_val, train_loss, val_loss = stats
 
@@ -462,7 +466,19 @@ class Trainer(object):
                 self.search_trajectory.valid_loss.append(valid_loss)
                 self.search_trajectory.test_acc.append(test_acc)
                 self.search_trajectory.test_loss.append(test_loss)
-                self.search_trajectory.runtime.append(end_time - start_time)
+                # For Stage 1 (query-based), calculate runtime based on scaled benchmark time
+                comp_factor = getattr(self.config.search, "comp_factor", 1.0)
+                logging.info(
+                    f"Using computation factor {comp_factor} for scaling runtime."
+                )
+                scaling_epochs = getattr(
+                    self.config.search, "scaling_factor_epochs", 1.0
+                )
+                logging.info(
+                    f"Using scaling factor {scaling_epochs} for scaling runtime."
+                )
+                scaled_runtime = train_time * scaling_epochs * comp_factor
+                self.search_trajectory.runtime.append(scaled_runtime)
                 self.search_trajectory.train_time.append(train_time)
                 self.train_top1.avg = train_acc
                 self.val_top1.avg = valid_acc

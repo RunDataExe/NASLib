@@ -9,10 +9,19 @@ import copy
 import time
 import torch
 
-# TODO use Accuracy again as metric for the objective function
+
+# DONE and verified till here
 # TODO 12,4 workers
-# TODO redo computational factor
-# TODO check time results for one-shot, multishot and two-stage methods for each dataset
+# TODO implement gsparsity and zcp error json handling like in two stage
+# TODO verify time results for one-shot, multishot and two-stage methods for each dataset (configurator)
+# TODO use Accuracy again as metric for the objective function
+# TODO comp factor should only count training time as training not the time it took for test
+# TODO verify hpo for one stage and two stage (accuracy/objective and runtimes)
+# ? DONE but not verified
+# TODO rerun computational factor
+
+# * OPEN
+# TODO save into lazygit and proceed with other tasks
 
 # TODO check that HPO space is the same for all methods e.g. gsparsity, zcp_gsparsity, second stage gsparsity, second stage zcp_gsparsity
 # TODO check if HPO space makes sense
@@ -487,35 +496,37 @@ def objective(trial: optuna.trial.Trial) -> float:
 
     # Run the optimizer
     try:
-        # The run_optimizer function will now return the final validation loss
-        _, _, final_val_loss = run_optimizer(
+        # The run_optimizer function will now return the final validation accuracy
+        _, final_val_acc, _ = run_optimizer(
             optimizer_type, search_space_type, dataset, config, seed, trial
         )
-        # Optuna maximizes the objective. Since we want to minimize loss, we return its negative.
-        return -final_val_loss
+        # Optuna maximizes the objective. We want to maximize accuracy.
+        return final_val_acc
     except optuna.TrialPruned:
-        logging.info(f"Trial {trial.number} was pruned. Reading loss from errors.json.")
+        logging.info(
+            f"Trial {trial.number} was pruned. Reading accuracy from errors.json."
+        )
         errors_path = os.path.join(config.save, "errors.json")
         try:
             with open(errors_path, "r") as f:
                 data = json.load(f)
-            # Check if 'valid_loss' key exists and the list is not empty
-            if data.get("valid_loss") and data["valid_loss"]:
-                last_loss = data["valid_loss"][-1]
-                if last_loss is not None and last_loss > 0:
+            # Check if 'valid_acc' key exists and the list is not empty
+            if data.get("valid_acc") and data["valid_acc"]:
+                last_acc = data["valid_acc"][-1]
+                if last_acc is not None and last_acc >= 0:
                     logging.info(
-                        f"Found last validation loss for pruned trial: {last_loss}"
+                        f"Found last validation accuracy for pruned trial: {last_acc}"
                     )
-                    return -last_loss
+                    return last_acc
             logging.warning(
-                f"Pruned trial's errors.json at {errors_path} has no valid_loss. Returning -inf."
+                f"Pruned trial's errors.json at {errors_path} has no valid_acc. Returning -inf."
             )
-            return -float("inf")
+            return -float("inf")  # Optuna will interpret this as a failure
         except (FileNotFoundError, json.JSONDecodeError, KeyError, IndexError) as e:
             logging.error(
-                f"Could not read loss from {errors_path} for pruned trial: {e}. Returning -inf."
+                f"Could not read accuracy from {errors_path} for pruned trial: {e}. Returning -inf."
             )
-            return -float("inf")
+            return -float("inf")  # Optuna will interpret this as a failure
     except Exception as e:
         logging.error(f"Trial {trial.number} failed with exception: {e}", exc_info=True)
         # Return a value indicating failure
@@ -839,13 +850,13 @@ def main():
     study = optuna.create_study(
         sampler=sampler,
         pruner=pruner,
-        direction="maximize",  # We maximize (-loss), which is equivalent to minimizing loss
+        direction="maximize",  # We maximize validation accuracy.
         study_name=f"{optimizer_type}-{search_space_type}-{dataset}-{seed}",
     )
 
     # Start optimization
     try:
-        study.optimize(objective, timeout=10800)
+        study.optimize(objective, timeout=600)  # 10800
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 

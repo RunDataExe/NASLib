@@ -3,42 +3,11 @@ import os
 from fvcore.common.config import CfgNode
 import json
 import argparse
+
 import optuna
 import optunahub
 import copy
 import time
-import torch
-
-# TODO use Accuracy again as metric for the objective function
-# TODO 12,4 workers
-# TODO redo computational factor
-# TODO check time results for one-shot, multishot and two-stage methods for each dataset
-
-# TODO check that HPO space is the same for all methods e.g. gsparsity, zcp_gsparsity, second stage gsparsity, second stage zcp_gsparsity
-# TODO check if HPO space makes sense
-# TODO make use of sqlite db to store the results of the trials
-# TODO Filter db to remove trials that would have not been permitted by the budget and create a new study with the filtered trials that I will use for importance checking and visualization
-# TODO Hyperparameter Importance
-# TODO Visualizations of Hyperparameters check optnas possibilities
-# // TODO check validation batches into list
-# //batch_size: 64
-# //train_portion: 0.9466741536616483
-# //42 validation batches
-# //batch_size: 64
-# //train_portion: 0.856805511717202
-# //112 validation batches
-
-# ? Maybe also plot the loss lines to check for overfitting and so on
-
-
-# Also set the number of threads for PyTorch to 1
-# torch.set_num_threads(16)
-# # Add this to print PyTorch config for debugging
-# print("--- PyTorch Configuration ---")
-# # torch.show_config() was added in torch 1.7. Use the underlying call for compatibility.
-# print(torch.__config__.show())
-# print("-----------------------------")
-# import multiprocessing as mp
 
 from optuna.trial import TrialState
 
@@ -71,7 +40,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling)",
+    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -251,7 +220,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "learning_rate_min", 1e-5, 5e-4, log=True
                 ),
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+                "train_portion": trial.suggest_float("train_portion", 0.9, 1.0),
             },
         }
     elif optimizer_type == "zcp_gsparsity":
@@ -282,7 +251,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "batch_size": trial.suggest_categorical(
                     "zcp_gsparsitybatch_size", [32, 64, 128]
                 ),
-                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+                "train_portion": trial.suggest_float("train_portion", 0.9, 1.0),
                 "zcp_method": zcp_method,
             },
         }
@@ -294,7 +263,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "batch_size": trial.suggest_categorical(
                     "ibg_batch_size", [32, 64, 128]
                 ),
-                "train_portion": trial.suggest_float("ibg_train_portion", 0.8, 0.99),
+                "train_portion": trial.suggest_float("ibg_train_portion", 0.4, 0.6),
             },
             # Stage 1 configuration (Inverted BANANAS)
             "stage1": {
@@ -309,18 +278,14 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "acq_fn_type": trial.suggest_categorical(
                         "ibg_s1_acq_fn_type", ["its", "ucb", "ei"]
                     ),
-                    "acq_fn_optimization": trial.suggest_categorical(
-                        "ibg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
+                    "acq_fn_optimization": "mutation",
+                    "encoding_type": None,
+                    "num_arches_to_mutate": 1,
+                    "max_mutations": 1,
+                    "num_candidates": 100,
+                    "removal_percentage": trial.suggest_float(
+                        "ibg_s1_removal_percentage", 0.5, 1.0
                     ),
-                    "encoding_type": None,  # is useless as its set by the predictor type
-                    "num_arches_to_mutate": trial.suggest_int(
-                        "ibg_s1_num_arches_to_mutate", 1, 5
-                    ),
-                    "max_mutations": trial.suggest_int("ibg_s1_max_mutations", 1, 3),
-                    "num_candidates": trial.suggest_int(
-                        "ibg_s1_num_candidates", 50, 200
-                    ),
-                    "removal_percentage": 1.0,
                 },
             },
             # Stage 2 configuration (GSparsity)
@@ -360,7 +325,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "batch_size": trial.suggest_categorical(
                     "ibzg_batch_size", [32, 64, 128]
                 ),
-                "train_portion": trial.suggest_float("ibzg_train_portion", 0.8, 0.99),
+                "train_portion": trial.suggest_float("ibzg_train_portion", 0.4, 0.6),
             },
             # Stage 1 configuration (Inverted BANANAS)
             "stage1": {
@@ -375,18 +340,14 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "acq_fn_type": trial.suggest_categorical(
                         "ibzg_s1_acq_fn_type", ["its", "ucb", "ei"]
                     ),
-                    "acq_fn_optimization": trial.suggest_categorical(
-                        "ibzg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
+                    "acq_fn_optimization": "mutation",
+                    "encoding_type": "path",
+                    "num_arches_to_mutate": 1,
+                    "max_mutations": 1,
+                    "num_candidates": 100,
+                    "removal_percentage": trial.suggest_float(
+                        "ibzg_s1_removal_percentage", 0.5, 1.0
                     ),
-                    "encoding_type": None,  # is useless as its set by the predictor type
-                    "num_arches_to_mutate": trial.suggest_int(
-                        "ibzg_s1_num_arches_to_mutate", 1, 5
-                    ),
-                    "max_mutations": trial.suggest_int("ibzg_s1_max_mutations", 1, 3),
-                    "num_candidates": trial.suggest_int(
-                        "ibzg_s1_num_candidates", 50, 200
-                    ),
-                    "removal_percentage": 1.0,
                 },
             },
             # Stage 2 configuration (ZCP GSparsity)
@@ -427,14 +388,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "fidelity": -1,
             },
         }
-    elif optimizer_type == "random_sampling":
-        config = {
-            "search": {
-                "checkpoint_freq": 5,
-                "epochs": 1,
-                "fidelity": -1,
-            },
-        }
     else:
         # This will catch any optimizer types that are not configured for HPO
         raise ValueError(f"Optimizer '{optimizer_type}' not set up for HPO.")
@@ -466,18 +419,15 @@ def objective(trial: optuna.trial.Trial) -> float:
     # Convert dictionary to CfgNode
     config = CfgNode.load_cfg(json.dumps(config))
 
-    # Set epochs for HPO trial.
-    # We hardcode this to 1 epoch for one-stage methods and 1+1 for two-stage methods.
+    # Set epochs for HPO trial
     if optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
     ]:
-        # For two-stage, set 1 epoch for each stage
         config.search.epochs = 2
         config.stage1.search.epochs = 1
         config.stage2.search.epochs = 1
     else:
-        # For one-stage methods, set 1 epoch
         config.search.epochs = 1
 
     # Update config with other details
@@ -487,39 +437,12 @@ def objective(trial: optuna.trial.Trial) -> float:
 
     # Run the optimizer
     try:
-        # The run_optimizer function will now return the final validation loss
-        _, _, final_val_loss = run_optimizer(
+        _, best_val_acc = run_optimizer(
             optimizer_type, search_space_type, dataset, config, seed, trial
         )
-        # Optuna maximizes the objective. Since we want to minimize loss, we return its negative.
-        return -final_val_loss
+        return best_val_acc
     except optuna.TrialPruned:
-        logging.info(f"Trial {trial.number} was pruned. Reading loss from errors.json.")
-        errors_path = os.path.join(config.save, "errors.json")
-        try:
-            with open(errors_path, "r") as f:
-                data = json.load(f)
-            # Check if 'valid_loss' key exists and the list is not empty
-            if data.get("valid_loss") and data["valid_loss"]:
-                last_loss = data["valid_loss"][-1]
-                if last_loss is not None and last_loss > 0:
-                    logging.info(
-                        f"Found last validation loss for pruned trial: {last_loss}"
-                    )
-                    return -last_loss
-            logging.warning(
-                f"Pruned trial's errors.json at {errors_path} has no valid_loss. Returning -inf."
-            )
-            return -float("inf")
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, IndexError) as e:
-            logging.error(
-                f"Could not read loss from {errors_path} for pruned trial: {e}. Returning -inf."
-            )
-            return -float("inf")
-    except Exception as e:
-        logging.error(f"Trial {trial.number} failed with exception: {e}", exc_info=True)
-        # Return a value indicating failure
-        return -float("inf")
+        return -1.0  # Return a low value for pruned trials
 
 
 def update_config(
@@ -536,37 +459,6 @@ def update_config(
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
     ):
         config.save_arch_weights = False
-
-    # Load computational factor and set scaling epochs for any method that might query a benchmark
-    comp_factor_path = os.path.join(
-        "naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_factor",
-        dataset,
-        "results.json",
-    )
-    comp_factor = 1.0  # Default value
-    if os.path.exists(comp_factor_path):
-        try:
-            with open(comp_factor_path, "r") as f:
-                data = json.load(f)
-                comp_factor = data["summary"]["part_time_computational_factor"][
-                    "average"
-                ]
-            logging.info(f"Loaded computational factor {comp_factor} for {dataset}")
-        except Exception as e:
-            logging.warning(
-                f"Warning: Could not load computational factor from {comp_factor_path}. Using default {comp_factor}. Error: {e}"
-            )
-    else:
-        logging.warning(
-            f"Warning: Computational factor file not found at {comp_factor_path}. Using default {comp_factor}."
-        )
-    config.search.comp_factor = comp_factor
-
-    # Set the number of epochs to scale queried time by (e.g., NB201 archs are trained for 200 epochs)
-    if search_space_type == "nasbench201":
-        config.search.scaling_factor_epochs = 200
-    else:
-        config.search.scaling_factor_epochs = 1  # Default for other search spaces
 
     config.dataset = dataset
 
@@ -688,7 +580,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     dataset_api = get_dataset_api(search_space_type, dataset)
 
     # Instantiate the optimizer
-    if optimizer_type in ["rs", "random_sampling"]:
+    if optimizer_type == "rs":
         optimizer = RandomSearch(config)
     elif optimizer_type == "gsparsity":
         optimizer = GSparseOptimizer(config)
@@ -707,19 +599,11 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     elif optimizer_type == "gsparsity":
         optimizer.adapt_search_space(search_space=search_space)
     elif optimizer_type == "zcp_gsparsity":
-        train_loader, _, _, _, _ = get_train_val_loaders(
-            config, train_workers=0, val_workers=0
-        )
+        train_loader, _, _, _, _ = get_train_val_loaders(config)
         optimizer.adapt_search_space(
             search_space=search_space, train_loader=train_loader
         )
-    elif optimizer_type in [
-        "rs",
-        "ls",
-        "bananas",
-        "inverted_bananas",
-        "random_sampling",
-    ]:
+    elif optimizer_type in ["rs", "ls", "bananas", "inverted_bananas"]:
         optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api)
     elif optimizer_type in [
         "inverted_bananas_gsparsity",
@@ -728,9 +612,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
         # For two-stage optimizers
         train_loader = None
         if "zcp" in optimizer_type:
-            train_loader, _, _, _, _ = get_train_val_loaders(
-                config, train_workers=0, val_workers=0
-            )
+            train_loader, _, _, _, _ = get_train_val_loaders(config)
         optimizer.adapt_search_space(
             search_space=search_space,
             dataset_api=dataset_api,
@@ -783,41 +665,19 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     # Get the search trajectory
     search_trajectory = trainer.search_trajectory
 
-    # The objective function needs the final validation accuracy and loss from the search.
+    # The objective function needs the final validation accuracy from the search.
     final_val_acc = -1.0
-    final_val_loss = float("inf")  # Initialize with a high value for minimization
-
     if search_trajectory and search_trajectory.valid_acc:
         final_val_acc = search_trajectory.valid_acc[-1]
 
-    if (
-        search_trajectory
-        and search_trajectory.valid_loss
-        and search_trajectory.valid_loss[-1] is not None
-    ):
-        final_val_loss = search_trajectory.valid_loss[-1]
-
     # During HPO, we don't need to run the full evaluation.
-    logger.info(
-        f"Finished trial search. Final validation accuracy: {final_val_acc}, Final validation loss: {final_val_loss}"
-    )
+    logger.info(f"Finished trial search. Final validation accuracy: {final_val_acc}")
 
-    return search_trajectory, final_val_acc, final_val_loss
+    return search_trajectory, final_val_acc
 
 
 def main():
     """Main function to run the HPO study"""
-    # Set the start method for multiprocessing to 'spawn' to avoid deadlocks with CUDA.
-    # This needs to be done in the main process before any subprocesses are created.
-    # try:
-    #     if mp.get_start_method(allow_none=True) != "spawn":
-    #         mp.set_start_method("spawn", force=True)
-    #         logging.info("Set multiprocessing start method to 'spawn'.")
-    # except RuntimeError:
-    #     # This can be raised if the context is already started.
-    #     logging.warning("Could not set multiprocessing start method.")
-    #     pass
-
     # DEHB setup
     module = optunahub.load_module("samplers/dehb")
     DEHBSampler = module.DEHBSampler
@@ -839,13 +699,13 @@ def main():
     study = optuna.create_study(
         sampler=sampler,
         pruner=pruner,
-        direction="maximize",  # We maximize (-loss), which is equivalent to minimizing loss
+        direction="maximize",
         study_name=f"{optimizer_type}-{search_space_type}-{dataset}-{seed}",
     )
 
     # Start optimization
     try:
-        study.optimize(objective, timeout=10800)
+        study.optimize(objective, timeout=900)
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 

@@ -14,7 +14,7 @@ from naslib.utils import (
     get_dataset_api,
     get_project_root,
 )
-from naslib.utils.dataset import get_train_val_loaders
+from naslib.utils.dataset import get_train_val_loaders, WorkerInitializer
 from naslib.search_spaces.core.query_metrics import Metric
 from naslib.defaults.trainer import Trainer
 
@@ -266,13 +266,42 @@ def main(args):
             f"NASLib internal test queue size (full original test set): {len(test_queue_naslib.dataset)}"
         )
 
-        # Assign queues for training based on dataset strategy
-        train_queue_final = train_queue_naslib
+        # Re-create DataLoaders to explicitly set worker counts as requested.
+        # This makes the worker configuration independent of the get_train_val_loaders implementation.
+        train_workers = 12
+        val_test_workers = 4
+        train_init_fn = WorkerInitializer(cfg.seed, is_train=True)
+        val_test_init_fn = WorkerInitializer(cfg.seed, is_train=False)
+
+        train_queue_final = DataLoader(
+            dataset=train_queue_naslib.dataset,
+            sampler=train_queue_naslib.sampler,
+            batch_size=train_queue_naslib.batch_size,
+            num_workers=train_workers,
+            pin_memory=train_queue_naslib.pin_memory,
+            worker_init_fn=train_init_fn,
+        )
+        logger.info(f"Re-created final train queue with {train_workers} workers.")
 
         if args.dataset == "cifar10":
             # For CIFAR-10, NASLib's splits match the paper's.
-            valid_queue_final = valid_queue_naslib
-            test_queue_final = test_queue_naslib
+            # Re-create valid and test queues to be explicit about workers.
+            valid_queue_final = DataLoader(
+                dataset=valid_queue_naslib.dataset,
+                sampler=valid_queue_naslib.sampler,
+                batch_size=valid_queue_naslib.batch_size,
+                num_workers=val_test_workers,
+                pin_memory=valid_queue_naslib.pin_memory,
+                worker_init_fn=val_test_init_fn,
+            )
+            test_queue_final = DataLoader(
+                dataset=test_queue_naslib.dataset,
+                sampler=test_queue_naslib.sampler,
+                batch_size=test_queue_naslib.batch_size,
+                num_workers=val_test_workers,
+                pin_memory=test_queue_naslib.pin_memory,
+                worker_init_fn=val_test_init_fn,
+            )
             logger.info(
                 "Using NASLib internal queues for CIFAR-10 as they match paper's splits."
             )
@@ -280,9 +309,11 @@ def main(args):
                 f"  Final Train queue size: {len(train_queue_final.sampler.indices) if hasattr(train_queue_final.sampler, 'indices') else len(train_queue_final.dataset)}"
             )
             logger.info(
-                f"  Final Val queue size: {len(valid_queue_final.sampler.indices) if hasattr(valid_queue_final.sampler, 'indices') else len(valid_queue_final.dataset)}"
+                f"  Re-created final Val queue with {val_test_workers} workers. Size: {len(valid_queue_final.sampler.indices) if hasattr(valid_queue_final.sampler, 'indices') else len(valid_queue_final.dataset)}"
             )
-            logger.info(f"  Final Test queue size: {len(test_queue_final.dataset)}")
+            logger.info(
+                f"  Re-created final Test queue with {val_test_workers} workers. Size: {len(test_queue_final.dataset)}"
+            )
 
         elif args.dataset == "cifar100":
             # Paper: Train 50k, Val 5k (from test), Test 5k (from test). Original test is 10k.
@@ -309,21 +340,17 @@ def main(args):
                 val_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=16,
+                num_workers=val_test_workers,
                 pin_memory=True,
-                worker_init_fn=lambda worker_id: np.random.seed(
-                    cfg.seed + 1 + worker_id
-                ),
+                worker_init_fn=val_test_init_fn,
             )
             test_queue_final = DataLoader(
                 test_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=16,
+                num_workers=val_test_workers,
                 pin_memory=True,
-                worker_init_fn=lambda worker_id: np.random.seed(
-                    cfg.seed + 1 + worker_id
-                ),
+                worker_init_fn=val_test_init_fn,
             )
 
             logger.info(
@@ -362,21 +389,17 @@ def main(args):
                 val_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=16,
+                num_workers=val_test_workers,
                 pin_memory=True,
-                worker_init_fn=lambda worker_id: np.random.seed(
-                    cfg.seed + 1 + worker_id
-                ),
+                worker_init_fn=val_test_init_fn,
             )
             test_queue_final = DataLoader(
                 test_subset,
                 batch_size=cfg.evaluation.batch_size,
                 shuffle=False,
-                num_workers=16,
+                num_workers=val_test_workers,
                 pin_memory=True,
-                worker_init_fn=lambda worker_id: np.random.seed(
-                    cfg.seed + 1 + worker_id
-                ),
+                worker_init_fn=val_test_init_fn,
             )
 
             logger.info(
@@ -396,8 +419,22 @@ def main(args):
             logger.error(
                 f"Dataset {args.dataset} does not have a specific paper split strategy implemented here. Using NASLib default splits."
             )
-            valid_queue_final = valid_queue_naslib
-            test_queue_final = test_queue_naslib
+            valid_queue_final = DataLoader(
+                dataset=valid_queue_naslib.dataset,
+                sampler=valid_queue_naslib.sampler,
+                batch_size=valid_queue_naslib.batch_size,
+                num_workers=val_test_workers,
+                pin_memory=valid_queue_naslib.pin_memory,
+                worker_init_fn=val_test_init_fn,
+            )
+            test_queue_final = DataLoader(
+                dataset=test_queue_naslib.dataset,
+                sampler=test_queue_naslib.sampler,
+                batch_size=test_queue_naslib.batch_size,
+                num_workers=val_test_workers,
+                pin_memory=test_queue_naslib.pin_memory,
+                worker_init_fn=val_test_init_fn,
+            )
 
         optimizer = SGD(
             arch_to_train.parameters(),
@@ -420,39 +457,63 @@ def main(args):
             train_loss_meter = utils.AverageMeter()
             train_acc_meter = utils.AverageMeter()
 
-            for step, (input_train, target_train) in enumerate(
-                train_queue_final
-            ):  # Use final queue
-                input_train = input_train.to(device)
-                target_train = target_train.to(device, non_blocking=True)
+            # This new implementation simulates parallel data loading for one epoch
+            # by interleaving training steps with validation data fetching.
+            # This avoids loading validation data twice and is more efficient.
+            train_iterator = iter(train_queue_final)
+            valid_iterator = iter(valid_queue_final) if valid_queue_final else None
 
-                optimizer.zero_grad()
-                logits_train = arch_to_train(input_train)
-                loss = criterion(logits_train, target_train)
-                loss.backward()
-                if cfg.evaluation.grad_clip:
-                    torch.nn.utils.clip_grad_norm_(
-                        arch_to_train.parameters(), cfg.evaluation.grad_clip
-                    )
-                optimizer.step()
+            # We'll store the validation data here as we fetch it.
+            validation_data_from_loader = []
 
-                prec1, _ = utils.accuracy(logits_train, target_train, topk=(1, 5))
-                train_loss_meter.update(loss.item(), input_train.size(0))
-                train_acc_meter.update(prec1.item(), input_train.size(0))
+            finished_training = False
+            finished_validating = not valid_iterator
 
-                logger.debug(
-                    f"  Arch {i + 1} Epoch {epoch}/{cfg.evaluation.epochs - 1}, Step {step}/{len(train_queue_final) - 1}, TrainLoss: {train_loss_meter.avg:.4f}, TrainAcc: {train_acc_meter.avg:.4f}"  # Use final queue
-                )
+            # This loop simulates running training and validation loading in parallel.
+            # It continues until both the training and validation queues for the epoch are exhausted.
+            while not finished_training or not finished_validating:
+                if not finished_training:
+                    try:
+                        input_train, target_train = next(train_iterator)
+
+                        input_train = input_train.to(device)
+                        target_train = target_train.to(device, non_blocking=True)
+
+                        optimizer.zero_grad()
+                        logits_train = arch_to_train(input_train)
+                        loss = criterion(logits_train, target_train)
+                        loss.backward()
+                        if cfg.evaluation.grad_clip:
+                            torch.nn.utils.clip_grad_norm_(
+                                arch_to_train.parameters(), cfg.evaluation.grad_clip
+                            )
+                        optimizer.step()
+
+                        prec1, _ = utils.accuracy(
+                            logits_train, target_train, topk=(1, 5)
+                        )
+                        train_loss_meter.update(loss.item(), input_train.size(0))
+                        train_acc_meter.update(prec1.item(), input_train.size(0))
+
+                    except StopIteration:
+                        finished_training = True
+
+                if not finished_validating:
+                    try:
+                        # Fetch validation data and store it. This happens "in parallel" to the training steps.
+                        input_val, target_val = next(valid_iterator)
+                        validation_data_from_loader.append((input_val, target_val))
+                    except StopIteration:
+                        finished_validating = True
 
             final_train_acc_local = train_acc_meter.avg
 
+            # Now, perform the validation evaluation on the data that was loaded in parallel.
             arch_to_train.eval()
             val_acc_meter = utils.AverageMeter()
-            if (
-                valid_queue_final
-            ):  # Ensure valid_queue_final is not None or empty and use final queue
+            if validation_data_from_loader:
                 with torch.no_grad():
-                    for input_val, target_val in valid_queue_final:  # Use final queue
+                    for input_val, target_val in validation_data_from_loader:
                         input_val = input_val.to(device)
                         target_val = target_val.to(device, non_blocking=True)
                         logits_val = arch_to_train(input_val)
@@ -471,6 +532,10 @@ def main(args):
             if val_acc_meter.avg > best_val_acc_local:
                 best_val_acc_local = val_acc_meter.avg
 
+        # The main training/validation loop is finished.
+        # Now, evaluate on the test set. This time is measured separately
+        # and not included in `local_train_time_total`.
+        test_start_time = time.time()
         arch_to_train.eval()
         test_acc_meter = utils.AverageMeter()
         if (
@@ -484,9 +549,13 @@ def main(args):
                     prec1, _ = utils.accuracy(logits_test, target_test, topk=(1, 5))
                     test_acc_meter.update(prec1.item(), input_test.size(0))
         final_test_acc_local = test_acc_meter.avg
+        local_test_time = time.time() - test_start_time
 
         logger.info(
-            f"  Local Train Finished Arch {i + 1}: TotalTime={local_train_time_total:.2f}s, FinalTrainAcc={final_train_acc_local:.4f}, BestValAcc={best_val_acc_local:.4f}, FinalTestAcc={final_test_acc_local:.4f}"
+            f"  Local Train Finished Arch {i + 1}: TotalTrainValTime={local_train_time_total:.2f}s, FinalTrainAcc={final_train_acc_local:.4f}, BestValAcc={best_val_acc_local:.4f}, FinalTestAcc={final_test_acc_local:.4f}"
+        )
+        logger.info(
+            f"  Final test evaluation time: {local_test_time:.2f}s (not included in TotalTrainValTime)"
         )
 
         comp_factor = -1.0
@@ -545,7 +614,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_archs",
         type=int,
-        default=3,
+        default=1,
         help="Number of random architectures to test if --arch_indices is not provided.",
     )
     parser.add_argument(

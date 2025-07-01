@@ -20,6 +20,21 @@ from naslib.optimizers import (
     Inverted_Bananas_GsparseOptimizer,
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
+
+# Add imports for self-training optimizers
+from naslib.optimizers.oneshot.gsparsity.self_training_bananas_optimizer import (
+    Bananas as SelfTrainingBananas,
+)
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_optimizer import (
+    Inverted_Bananas as SelfTrainingInvertedBananas,
+)
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_optimizer import (
+    Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
+)
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+    Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
+)
+
 from naslib import utils
 from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
 from naslib.utils import (
@@ -38,7 +53,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling)",
+    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -326,7 +341,7 @@ optimizer_configs = {
         "stage2": {
             "search": {
                 # "epochs": search_epochs * 2 // 3,  #!
-                "epochs": 4,
+                "epochs": 2,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -384,6 +399,131 @@ optimizer_configs = {
             },
         },
     },
+    # Add new self-training optimizer configurations below
+    "self_training_bananas": {
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": None,
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,
+            "train_epochs": 5,  #!
+            "use_real_time": True,
+        },
+    },
+    "self_training_inverted_bananas": {
+        "search": {
+            "checkpoint_freq": 1,
+            "epochs": search_epochs,
+            "k": 10,
+            "num_init": 10,
+            "num_ensemble": 5,
+            "predictor_type": "mlp",
+            "acq_fn_type": "its",
+            "acq_fn_optimization": "mutation",
+            "encoding_type": "path",
+            "num_arches_to_mutate": 1,
+            "max_mutations": 1,
+            "num_candidates": 100,
+            "train_epochs": 200,  #!
+            "use_real_time": True,
+        },
+    },
+    "self_training_inverted_bananas_gsparsity": {
+        "search": {
+            "checkpoint_freq": 1,
+            "epochs": search_epochs,
+            "batch_size": 64,
+            "train_portion": 0.5,
+            "cutout": False,
+            "cutout_length": 16,
+            # "use_real_time": True, #!
+            "use_real_time": False,
+        },
+        # Stage 1 configuration (Self-Training Inverted BANANAS)
+        "stage1": {
+            "search": {
+                "epochs": 3,
+                "train_epochs": 3,  #!
+                "k": 10,
+                "num_init": 10,
+                "num_ensemble": 5,
+                "predictor_type": "mlp",
+                "acq_fn_type": "its",
+                "acq_fn_optimization": "mutation",
+                "encoding_type": "path",
+                "num_arches_to_mutate": 1,
+                "max_mutations": 1,
+                "num_candidates": 100,
+                "removal_percentage": 0.5,
+            },
+        },
+        # Stage 2 configuration (GSparsity)
+        "stage2": {
+            "search": {
+                "epochs": 2,
+                "grad_clip": 0,
+                "weight_decay": 60,
+                "threshold": 0.000001,
+                "normalization": "div",
+                "normalization_exponent": 0.5,
+                "learning_rate": 0.001,
+                "momentum": 0.8,
+                "learning_rate_min": 0.0001,
+            },
+        },
+    },
+    "self_training_inverted_bananas_zcp_gsparsity": {
+        "search": {
+            "checkpoint_freq": 1,
+            "epochs": search_epochs,
+            "batch_size": 64,
+            "train_portion": 0.5,
+            "cutout": False,
+            "cutout_length": 16,
+            "use_real_time": False,
+        },
+        # Stage 1 configuration (Self-Training Inverted BANANAS)
+        "stage1": {
+            "search": {
+                "epochs": 3,
+                "train_epochs": 3,
+                "k": 10,
+                "num_init": 10,
+                "num_ensemble": 5,
+                "predictor_type": "mlp",
+                "acq_fn_type": "its",
+                "acq_fn_optimization": "mutation",
+                "encoding_type": "path",
+                "num_arches_to_mutate": 1,
+                "max_mutations": 1,
+                "num_candidates": 100,
+                "removal_percentage": 0.5,
+            },
+        },
+        # Stage 2 configuration (ZCP GSparsity)
+        "stage2": {
+            "search": {
+                "epochs": 2,
+                "grad_clip": 0,
+                "weight_decay": 60,
+                "threshold": 0.000001,
+                "normalization": "div",
+                "normalization_exponent": 0.5,
+                "learning_rate": 0.001,
+                "momentum": 0.8,
+                "learning_rate_min": 0.0001,
+                "zcp_method": zcp_method,
+            },
+        },
+    },
 }
 
 
@@ -402,6 +542,8 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         or optimizer_type == "drnas"
         or optimizer_type == "inverted_bananas_gsparsity"
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
+        or optimizer_type == "self_training_inverted_bananas_zcp_gsparsity"
+        or optimizer_type == "self_training_inverted_bananas_gsparsity"
     ):
         config.save_arch_weights = False
     comp_factor_path = os.path.join(
@@ -433,6 +575,16 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         config.search.scaling_factor_epochs = 200
     else:
         config.search.scaling_factor_epochs = 1  # Default for other search spaces
+
+    # If use_real_time is set, we use the actual measured time from self-training optimizers.
+    # The trainer multiplies the returned time by these factors, so we set them to 1.
+    if getattr(config.search, "use_real_time", False):
+        config.search.comp_factor = 1.0
+        config.search.scaling_factor_epochs = 1.0
+        logging.info(
+            f"Optimizer '{optimizer_type}' has 'use_real_time' set. "
+            f"Setting comp_factor and scaling_factor_epochs to 1.0 to use real runtime."
+        )
 
     config.dataset = dataset
 
@@ -566,6 +718,14 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         optimizer = Inverted_Bananas_GsparseOptimizer(config)
     elif optimizer_type == "inverted_bananas_zcp_gsparsity":
         optimizer = Inverted_Bananas_ZCP_GsparseOptimizer(config)
+    elif optimizer_type == "self_training_bananas":
+        optimizer = SelfTrainingBananas(config)
+    elif optimizer_type == "self_training_inverted_bananas":
+        optimizer = SelfTrainingInvertedBananas(config)
+    elif optimizer_type == "self_training_inverted_bananas_gsparsity":
+        optimizer = SelfTrainingInvertedBananasGsparse(config)
+    elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
+        optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
@@ -587,11 +747,15 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         "bananas",
         "inverted_bananas",
         "random_sampling",
+        "self_training_bananas",
+        "self_training_inverted_bananas",
     ]:
         optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api)
     elif optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         # For two-stage optimizers
         train_loader = None
@@ -611,6 +775,8 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     if optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         # from naslib.defaults.two_stage_trainer import Trainer
         from naslib.defaults.two_stage_trainer_multi_dataloading_workers import Trainer

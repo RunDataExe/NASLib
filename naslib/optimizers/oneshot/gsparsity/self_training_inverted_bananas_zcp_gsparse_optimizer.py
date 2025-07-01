@@ -1,0 +1,488 @@
+import logging
+import torch
+import numpy as np
+from copy import deepcopy
+from pathlib import Path
+import json
+import os  # Import os for path checking
+
+from naslib.optimizers.core.metaclasses import MetaOptimizer
+from naslib.optimizers.oneshot.gsparsity.zcp_gsparse_optimizer import (
+    ZCP_GSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_optimizer import (
+    Inverted_Bananas,
+)
+from naslib.utils.remove_arch_from_search_space import (
+    add_betas_to_edges,
+    remove_architecture,
+)
+from naslib.search_spaces.core.query_metrics import Metric
+from naslib.utils import SimpleStateDict  # Import the new wrapper
+
+logger = logging.getLogger(__name__)
+
+
+class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
+    """
+    A two-stage optimizer that first removes poor architectures using Inverted BANANAS,
+    then applies ZCP GSparsity to the reduced search space.
+
+    Stage 1: Identify and remove worst architectures using Inverted BANANAS.
+    Stage 2: Apply ZCP GSparsity on the pruned search space.
+    """
+
+    def __init__(self, config):
+        super(Inverted_Bananas_ZCP_GsparseOptimizer, self).__init__()
+        self.config = config
+        self.dataset = config.dataset
+
+        # Stage 1: Inverted BANANAS configuration
+        self.stage1_config = deepcopy(config.stage1)
+        self.stage1_config.dataset = config.dataset
+        self.stage1_config.data = config.data
+        self.stage1_config.search.seed = config.search.seed
+        self.stage1_epochs = self.stage1_config.search.epochs
+        self.removal_percentage = self.stage1_config.search.removal_percentage
+
+        logger.info(
+            f"Stage 1 (Inverted BANANAS) will run for {self.stage1_epochs} epochs."
+        )
+        logger.info(
+            f"Will remove {self.removal_percentage * 100:.2f}% of architectures after Stage 1."
+        )
+        self.stage1_optimizer = Inverted_Bananas(self.stage1_config)
+        self.stage1_optimizer.performance_metric = Metric.TRAIN_ACCURACY
+
+        # Stage 2: ZCP GSParseOptimizer configuration
+        self.stage2_config = deepcopy(config.stage2)
+        self.stage2_config.dataset = config.dataset
+        self.stage2_epochs = self.stage2_config.search.epochs
+        logger.info(
+            f"Stage 2 (ZCP GSparsity) will run for {self.stage2_epochs} epochs."
+        )
+        self.stage2_optimizer = ZCP_GSparseOptimizer(self.stage2_config)
+
+        self.current_stage = 1
+        self.current_overall_epoch = 0
+
+        self.search_space = None
+        self.scope = None
+        self.dataset_api = None
+        self.train_loader = None  # Will store the train_loader for ZCP
+
+        self.worst_architectures_op_indices = []
+        self.ibgs_state_wrapper = SimpleStateDict()  # Instantiate the wrapper
+
+    def adapt_search_space(
+        self, search_space, scope=None, dataset_api=None, train_loader=None
+    ):
+        # super().adapt_search_space(search_space, scope, dataset_api)
+        self.search_space = search_space
+        self.scope = scope
+        self.dataset_api = dataset_api
+        self.train_loader = train_loader
+
+        logger.info("Adding beta parameters to edges for potential pruning.")
+        add_betas_to_edges(self.search_space, scope=self.scope)
+
+        # Adapt search space for stage 1 optimizer
+        # Give a deepcopy to stage1, as BANANAS might have internal state tied to it,
+        # though it's query-based and shouldn't modify the graph structure.
+        # The main self.search_space is the one that will be pruned.
+        self.stage1_optimizer.adapt_search_space(
+            deepcopy(self.search_space), scope=self.scope, dataset_api=self.dataset_api
+        )
+        # Stage 2 optimizer will be adapted later with the pruned search space.
+
+    @property
+    def using_step_function(self):
+        if self.current_stage == 1:
+            return self.stage1_optimizer.using_step_function
+        elif self.current_stage == 2:
+            return self.stage2_optimizer.using_step_function
+        return False  # Default if stage is not set
+
+    def _infer_stage_from_checkpoint_content(self, checkpoint_data):
+        """
+        Infers the stage based on the presence of optimizer-specific keys in the checkpoint.
+        This is a fallback if the 'ibgs_specific_state_wrapper' is not present or invalid.
+        """
+        # Check for Stage 2 (GSParseOptimizer) specific keys
+        # GSParseOptimizer saves 'op_optimizer'
+        if "op_optimizer" in checkpoint_data:
+            self.current_stage = 2
+            logger.info(
+                "Inferred Stage 2 from checkpoint content (e.g., 'op_optimizer' found)."
+            )
+            # Try to load worst_architectures_op_indices if it was saved by an older version
+            # This is a best-effort attempt for backward compatibility if the wrapper was missing.
+            if "worst_architectures_op_indices" in checkpoint_data:
+                self.worst_architectures_op_indices = checkpoint_data[
+                    "worst_architectures_op_indices"
+                ]
+                logger.info(
+                    f"Loaded 'worst_architectures_op_indices' (fallback): {len(self.worst_architectures_op_indices)} archs."
+                )
+        # Check for Stage 1 (Bananas) specific keys
+        # Bananas saves 'model' which is a ModuleList (history)
+        elif "model" in checkpoint_data and isinstance(
+            checkpoint_data["model"], torch.nn.ModuleList
+        ):
+            self.current_stage = 1
+            logger.info(
+                "Inferred Stage 1 from checkpoint content (e.g., 'model' is ModuleList)."
+            )
+        else:
+            self.current_stage = 1  # Default to stage 1 if unsure
+            logger.warning(
+                "Could not confidently infer stage from checkpoint content. Defaulting to Stage 1."
+            )
+
+    def before_training(self, resume_from_path=None):
+        logger.info(
+            "Calling before_training for Inverted_Bananas_ZCP_GsparseOptimizer."
+        )
+
+        # Default to Stage 1, will be overridden if resuming
+        self.current_stage = 1
+        logger.info("Trying to resume from path: {}".format(resume_from_path))
+        if resume_from_path and os.path.exists(resume_from_path):
+            logger.info(f"Attempting to resume from checkpoint: {resume_from_path}")
+            checkpoint_data = torch.load(resume_from_path, map_location="cpu")
+
+            loaded_from_wrapper = False
+            if "ibgs_specific_state_wrapper" in checkpoint_data:
+                loaded_ibgs_state_dict = checkpoint_data["ibgs_specific_state_wrapper"]
+                if (
+                    isinstance(loaded_ibgs_state_dict, dict)
+                    and loaded_ibgs_state_dict.get("optimizer_name")
+                    == "Inverted_Bananas_ZCP_GsparseOptimizer"
+                ):
+                    self.current_stage = loaded_ibgs_state_dict.get(
+                        "current_stage_val", 1
+                    )
+                    self.worst_architectures_op_indices = loaded_ibgs_state_dict.get(
+                        "worst_architectures_op_indices_val", []
+                    )
+                    self.ibgs_state_wrapper.load_state_dict(loaded_ibgs_state_dict)
+                    logger.info(
+                        f"Loaded IBZCPGS specific state from wrapper in checkpoint: current_stage={self.current_stage}, "
+                        f"{len(self.worst_architectures_op_indices)} worst archs identified."
+                    )
+                    loaded_from_wrapper = True
+                else:
+                    logger.warning(
+                        "Found 'ibgs_specific_state_wrapper' in checkpoint, but content mismatch or not a dict. Optimizer name: {}".format(
+                            loaded_ibgs_state_dict.get("optimizer_name")
+                            if isinstance(loaded_ibgs_state_dict, dict)
+                            else "N/A"
+                        )
+                    )
+
+            if not loaded_from_wrapper:
+                logger.info(
+                    "IBZCPGS specific state not found/valid in checkpoint via wrapper. Inferring stage from content."
+                )
+                self._infer_stage_from_checkpoint_content(checkpoint_data)
+
+            if self.current_stage == 2:
+                logger.info("Resuming into Stage 2.")
+                if self.worst_architectures_op_indices:
+                    logger.info(
+                        f"Re-applying pruning of {len(self.worst_architectures_op_indices)} architectures to self.search_space."
+                    )
+                    for arch_op_idx_raw in self.worst_architectures_op_indices:
+                        try:
+                            arch_op_idx_cleaned = [int(val) for val in arch_op_idx_raw]
+                            remove_architecture(
+                                self.search_space,
+                                arch_representation=arch_op_idx_cleaned,
+                                representation_type="op_indices",
+                                scope=self.scope,
+                            )
+                        except Exception as e_prune:
+                            logger.warning(
+                                f"Could not re-apply pruning for architecture {arch_op_idx_raw} during resume: {e_prune}"
+                            )
+                    logger.info(
+                        "Pruning re-applied to self.search_space for Stage 2 resume."
+                    )
+                else:
+                    logger.warning(
+                        "Resuming into Stage 2, but no 'worst_architectures_op_indices' were loaded/found. "
+                        "ZCP GSParseOptimizer will use the search space as is."
+                    )
+
+                logger.info(
+                    "Adapting search space for Stage 2 optimizer (ZCP_GSParseOptimizer) during resume."
+                )
+                # self.train_loader should have been set by adapt_search_space if this is a resume
+                # or needs to be re-established if not. For ZCP, train_loader is essential.
+                if self.train_loader is None:
+                    logger.warning(
+                        "train_loader is None when resuming to Stage 2. This might be an issue for ZCP_GSparseOptimizer if not set by Trainer."
+                    )
+                self.stage2_optimizer.adapt_search_space(
+                    self.search_space, self.scope, train_loader=self.train_loader
+                )
+                self.stage2_optimizer.before_training()
+
+            elif self.current_stage == 1:
+                logger.info("Resuming into Stage 1.")
+                self.stage1_optimizer.before_training()
+
+        else:  # No resume path or path does not exist
+            if resume_from_path:
+                logger.warning(
+                    f"Resume path {resume_from_path} not found. Starting fresh as Stage 1."
+                )
+            else:
+                logger.info("No resume path provided. Starting fresh as Stage 1.")
+            self.current_stage = 1
+            self.stage1_optimizer.before_training()
+
+    def new_epoch(self, epoch):
+        self.current_overall_epoch = epoch
+        logger.debug(f"Overall Epoch: {epoch}. Current Stage: {self.current_stage}")
+
+        if self.current_stage == 1 and epoch == self.stage1_epochs:
+            logger.info(
+                f"Overall epoch {epoch} reached. This is the designated start for Stage 2."
+            )
+            self._perform_transition_to_stage2()
+
+        if self.current_stage == 1:
+            if epoch < self.stage1_epochs:
+                self.stage1_optimizer.new_epoch(epoch)
+            # Transition logic is handled in train_statistics after the last epoch of stage 1
+
+        elif self.current_stage == 2:
+            stage2_epoch = epoch - self.stage1_epochs
+            self.stage2_optimizer.new_epoch(stage2_epoch)
+
+    def _perform_transition_to_stage2(self):
+        logger.info(
+            f"Transitioning from Stage 1 to Stage 2. Stage 1 completed {self.stage1_epochs} epochs."
+        )
+
+        # Convert ModuleList to a regular list to use sort()
+        evaluated_architectures_meta = list(self.stage1_optimizer.history)
+        if not evaluated_architectures_meta:
+            logger.warning(
+                "No architectures found in Inverted BANANAS history. Skipping pruning."
+            )
+            self.current_stage = 2
+            logger.info(
+                "Adapting search space and calling before_training for Stage 2 (ZCP GSParseOptimizer) with unpruned space."
+            )
+            self.stage2_optimizer.adapt_search_space(
+                self.search_space, self.scope, train_loader=self.train_loader
+            )
+            self.stage2_optimizer.before_training()
+            return
+
+        evaluated_architectures_meta.sort(
+            key=lambda x: x.accuracy
+        )  # Ascending for Inverted BANANAS
+
+        num_to_remove = int(self.removal_percentage * len(evaluated_architectures_meta))
+        worst_architectures_meta = evaluated_architectures_meta[:num_to_remove]
+
+        logger.info(
+            f"Identified {len(worst_architectures_meta)} worst architectures to remove."
+        )
+
+        self.worst_architectures_op_indices = []
+        for arch_meta in worst_architectures_meta:
+            try:
+                op_indices = arch_meta.arch.get_op_indices()
+                self.worst_architectures_op_indices.append(op_indices)
+                logger.debug(
+                    f"Marking for removal: {op_indices} (Accuracy: {arch_meta.accuracy})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Could not get op_indices for an architecture: {e}. Arch: {arch_meta.arch}"
+                )
+
+        logger.info(
+            f"Starting pruning of {len(self.worst_architectures_op_indices)} architectures from the main search space."
+        )
+        for i, arch_op_idx_raw in enumerate(self.worst_architectures_op_indices):
+            logger.debug(
+                f"Attempting to remove architecture {i + 1}/{len(self.worst_architectures_op_indices)}: {arch_op_idx_raw}"
+            )
+            try:
+                arch_op_idx_cleaned = [int(val) for val in arch_op_idx_raw]
+                remove_architecture(
+                    self.search_space,
+                    arch_representation=arch_op_idx_cleaned,
+                    representation_type="op_indices",
+                    scope=self.scope,
+                )
+            except IndexError as e:
+                logger.warning(
+                    f"Could not remove architecture {arch_op_idx_raw} (already removed or op not found?): {e}"
+                )
+            except Exception as e:
+                logger.error(f"Error removing architecture {arch_op_idx_raw}: {e}")
+        logger.info("Pruning complete.")
+
+        self.current_stage = 2
+        logger.info(
+            "Adapting search space and calling before_training for Stage 2 (ZCP GSParseOptimizer)."
+        )
+        self.stage2_optimizer.adapt_search_space(
+            self.search_space, self.scope, train_loader=self.train_loader
+        )
+        self.stage2_optimizer.before_training()
+
+    def train_statistics(self, report_incumbent=True):
+        if self.current_stage == 1:
+            return self.stage1_optimizer.train_statistics(report_incumbent)
+        else:
+            logger.error(f"Invalid stage: {self.current_stage}")
+            # Return dummy/empty statistics to avoid crashing trainer
+            logger.warning(
+                "Returning dummy statistics for invalid stage in train_statistics."
+            )
+            return 0.0, 0.0, 0.0, 0.0  # train_acc, valid_acc, test_acc, train_time
+
+    def step(self, data_train, data_val):
+        """
+        Delegates the step call to the current stage's optimizer.
+        This method is expected to be called only when self.using_step_function is True,
+        which corresponds to Stage 2 (GSParseOptimizer).
+        """
+        if self.current_stage == 2:
+            return self.stage2_optimizer.step(data_train, data_val)
+        else:
+            # This case should ideally not be reached if the Trainer respects using_step_function.
+            # If stage 1 (Inverted_Bananas) were to use step, it would be handled here.
+            # However, Inverted_Bananas (via Bananas) sets using_step_function = False.
+            logger.error(
+                f"Step function called unexpectedly for stage {self.current_stage}."
+            )
+            # Call super().step() which will raise NotImplementedError from MetaOptimizer,
+            # indicating an issue with the control flow if this path is taken.
+            return super().step(data_train, data_val)
+
+    def test_statistics(self):
+        if self.current_stage == 1:
+            return self.stage1_optimizer.test_statistics()
+        elif self.current_stage == 2:
+            return self.stage2_optimizer.test_statistics()
+        else:
+            logger.error(f"Invalid stage: {self.current_stage} in test_statistics")
+            return None  # Or appropriate default
+
+    def get_final_architecture(self):
+        if self.current_stage == 2:
+            final_arch_stage2 = self.stage2_optimizer.get_final_architecture()
+            if final_arch_stage2 is not None:
+                logger.info(
+                    "Getting final architecture from Stage 2 (GSParseOptimizer)."
+                )
+                return final_arch_stage2
+            else:
+                logger.warning(
+                    "Stage 2 (GSParseOptimizer) did not yield a final architecture."
+                )
+
+        logger.warning(
+            "Falling back to Stage 1 (Inverted BANANAS) for final architecture (inverted perspective)."
+        )
+        if self.stage1_optimizer.history:
+            return (
+                self.stage1_optimizer.get_final_architecture()
+            )  # Returns the worst one found
+
+        logger.error("No final architecture available from either stage.")
+        return None
+
+    def get_op_optimizer(self):
+        if self.current_stage == 2:
+            if (
+                hasattr(self.stage2_optimizer, "op_optimizer")
+                and self.stage2_optimizer.op_optimizer is not None
+            ):
+                return self.stage2_optimizer.op_optimizer
+            else:
+                logger.warning(
+                    "Stage 2 optimizer (ZCP_GSParseOptimizer) does not have a configured 'op_optimizer' instance."
+                )
+                return None
+        return None
+
+    def get_model_size(self):
+        # The model size is primarily determined by the search space structure.
+        # If sub-optimizers report different sizes based on internal parameters,
+        # this could be stage-dependent. However, for NASLib, it's usually search_space.n_params()
+        if self.search_space and hasattr(self.search_space, "get_model_size"):
+            return (
+                self.search_space.get_model_size()
+            )  # Prefer search_space's own method if available
+        if self.current_stage == 1 and hasattr(self.stage1_optimizer, "get_model_size"):
+            return self.stage1_optimizer.get_model_size()
+        elif self.current_stage == 2 and hasattr(
+            self.stage2_optimizer, "get_model_size"
+        ):
+            return self.stage2_optimizer.get_model_size()
+
+    def get_checkpointables(self):
+        current_stage_checkpointables = {}
+        if self.current_stage == 1:
+            if hasattr(self.stage1_optimizer, "get_checkpointables"):
+                current_stage_checkpointables = (
+                    self.stage1_optimizer.get_checkpointables()
+                )  # Should be {'model': history_module_list}
+            else:
+                logger.warning(
+                    "Stage 1 optimizer (InvertedBananas) does not implement get_checkpointables correctly or at all."
+                )
+        elif self.current_stage == 2:
+            if hasattr(self.stage2_optimizer, "get_checkpointables"):
+                current_stage_checkpointables = self.stage2_optimizer.get_checkpointables()  # Should be {'model': zcp_gsparse_graph, 'op_optimizer': zcp_gsparse_op_optimizer}
+            else:
+                logger.warning(
+                    "Stage 2 optimizer (ZCP_GSParseOptimizer) does not implement get_checkpointables."
+                )
+        else:
+            logger.warning(
+                f"get_checkpointables called with unknown stage: {self.current_stage}"
+            )
+
+        # Update the state of the wrapper instance before returning it
+        self.ibgs_state_wrapper.state = {
+            "optimizer_name": "Inverted_Bananas_ZCP_GsparseOptimizer",  # For identification
+            "current_stage_val": self.current_stage,
+            "worst_architectures_op_indices_val": self.worst_architectures_op_indices,
+        }
+
+        final_checkpointables = {**current_stage_checkpointables}
+        # Add the wrapper instance itself as a checkpointable object
+        final_checkpointables["ibgs_specific_state_wrapper"] = self.ibgs_state_wrapper
+        return final_checkpointables
+
+    def after_training(self):
+        """
+        Called after the search process is finished.
+        Delegates to the Stage 2 optimizer's after_training method.
+        """
+        if self.current_stage == 2 and hasattr(self.stage2_optimizer, "after_training"):
+            logger.info(
+                "Calling after_training for Stage 2 optimizer (ZCP_GSParseOptimizer)."
+            )
+            self.stage2_optimizer.config.save = self.config.save
+            self.stage2_optimizer.after_training()
+        else:
+            logger.info(
+                "No specific after_training actions for the current state of Inverted_Bananas_ZCP_GSParseOptimizer or Stage 2 optimizer does not have after_training."
+            )
+
+    def get_total_epochs(self):
+        """
+        Returns the total number of epochs this optimizer will run for.
+        """
+        return self.stage1_epochs + self.stage2_epochs

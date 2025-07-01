@@ -101,42 +101,6 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
             return self.stage2_optimizer.using_step_function
         return False  # Default if stage is not set
 
-    def _infer_stage_from_checkpoint_content(self, checkpoint_data):
-        """
-        Infers the stage based on the presence of optimizer-specific keys in the checkpoint.
-        This is a fallback if the 'ibgs_specific_state_wrapper' is not present or invalid.
-        """
-        # Check for Stage 2 (GSParseOptimizer) specific keys
-        # GSParseOptimizer saves 'op_optimizer'
-        if "op_optimizer" in checkpoint_data:
-            self.current_stage = 2
-            logger.info(
-                "Inferred Stage 2 from checkpoint content (e.g., 'op_optimizer' found)."
-            )
-            # Try to load worst_architectures_op_indices if it was saved by an older version
-            # This is a best-effort attempt for backward compatibility if the wrapper was missing.
-            if "worst_architectures_op_indices" in checkpoint_data:
-                self.worst_architectures_op_indices = checkpoint_data[
-                    "worst_architectures_op_indices"
-                ]
-                logger.info(
-                    f"Loaded 'worst_architectures_op_indices' (fallback): {len(self.worst_architectures_op_indices)} archs."
-                )
-        # Check for Stage 1 (Bananas) specific keys
-        # Bananas saves 'model' which is a ModuleList (history)
-        elif "model" in checkpoint_data and isinstance(
-            checkpoint_data["model"], torch.nn.ModuleList
-        ):
-            self.current_stage = 1
-            logger.info(
-                "Inferred Stage 1 from checkpoint content (e.g., 'model' is ModuleList)."
-            )
-        else:
-            self.current_stage = 1  # Default to stage 1 if unsure
-            logger.warning(
-                "Could not confidently infer stage from checkpoint content. Defaulting to Stage 1."
-            )
-
     def before_training(self, resume_from_path=None):
         logger.info(
             "Calling before_training for Inverted_Bananas_ZCP_GsparseOptimizer."
@@ -149,7 +113,6 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
             logger.info(f"Attempting to resume from checkpoint: {resume_from_path}")
             checkpoint_data = torch.load(resume_from_path, map_location="cpu")
 
-            loaded_from_wrapper = False
             if "ibgs_specific_state_wrapper" in checkpoint_data:
                 loaded_ibgs_state_dict = checkpoint_data["ibgs_specific_state_wrapper"]
                 if (
@@ -168,7 +131,6 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
                         f"Loaded IBZCPGS specific state from wrapper in checkpoint: current_stage={self.current_stage}, "
                         f"{len(self.worst_architectures_op_indices)} worst archs identified."
                     )
-                    loaded_from_wrapper = True
                 else:
                     logger.warning(
                         "Found 'ibgs_specific_state_wrapper' in checkpoint, but content mismatch or not a dict. Optimizer name: {}".format(
@@ -177,12 +139,6 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
                             else "N/A"
                         )
                     )
-
-            if not loaded_from_wrapper:
-                logger.info(
-                    "IBZCPGS specific state not found/valid in checkpoint via wrapper. Inferring stage from content."
-                )
-                self._infer_stage_from_checkpoint_content(checkpoint_data)
 
             if self.current_stage == 2:
                 logger.info("Resuming into Stage 2.")

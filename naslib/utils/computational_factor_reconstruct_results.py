@@ -34,7 +34,7 @@ def parse_log_file(log_path, seed):
     )
     # Pattern for locally trained results
     local_train_pattern = re.compile(
-        r"Local Train Finished Arch \d+: TotalTime=([\d\.]+)s, FinalTrainAcc=([\d\.]+), BestValAcc=([\d\.]+), FinalTestAcc=([\d\.]+)"
+        r"Local Train Finished Arch \d+: TotalTrainValTime=([\d\.]+)s, FinalTrainAcc=([\d\.]+), BestValAcc=([\d\.]+), FinalTestAcc=([\d\.]+)"
     )
 
     # Find matches

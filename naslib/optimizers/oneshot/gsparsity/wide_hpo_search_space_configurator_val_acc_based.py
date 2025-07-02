@@ -19,16 +19,94 @@ import torch
 # TODO verify hpo for one stage and two stage (accuracy/objective and runtimes)
 # ? DONE but not verified
 # TODO rerun computational factor
+# TODO verify self_training_inverted_bananas_gsparsity imporant batchsize etc for first stage with self training !!!
+# TODO verfify search space (bananas ensemble options)
+# TODO verify resumption of non self training inverted bananas gsparsity
+# TODO verify resumption of non self training inverted bananas zcp gsparsity
+# TODO check the zcp scores for jacov, param and synflow for 0 values (jacov seems to do)
+# TODO create and verify self training inverted bananas zcp gsparsity
+# TODO use my own self_training versions for wide and narrow hpo
+# TODO check the conditions of the predictors for BANANAS some might only work if I use ZCP which I will not do
+# TODO check that HPO space is the same for all methods e.g. gsparsity, zcp_gsparsity, second stage gsparsity, second stage zcp_gsparsity
+# TODO check if HPO space makes sense and change it if necessary
+# TODO make use of sqlite db to store the results of the trials
+# TODO Hyperparameter Importance
 
 # * OPEN
+
+#! Today:
+
+# TODO save time into that DB or do I have to filter based on the trials made by naslib?
+
 # TODO save into lazygit and proceed with other tasks
 
-# TODO check that HPO space is the same for all methods e.g. gsparsity, zcp_gsparsity, second stage gsparsity, second stage zcp_gsparsity
-# TODO check if HPO space makes sense
-# TODO make use of sqlite db to store the results of the trials
+
+# TODO had deadlock problem with self_training_inverted_bananas_gsparsity (check if case for zcp version maybe reduce workers by 2-4 by counting how many loaders I need concurrently)
+
+
+# TODO verify self_training_bananas
+# TODO verify self_training_inverted_bananas -> 200 epochs training vs querry based inverted bananas
+
+# TODO also make comp factor for 0 workers such that I have fair comp for the self train bananas stuff (e.g. scale it up to the speed it would have with 12,4 workers)
+
+
+# TODO enable correct usage of computational factor for first stage of self_training_inverted_bananas_gsparsity
+# TODO verify time for self_training_inverted_bananas_gsparsity
+# TODO use computational factor for first stage of self_training_inverted_bananas_zcp_gsparsity
+# TODO verify time for self_training_inverted_bananas_zcp_gsparsity
+
+
+# Would be even better if I ran BANANAS for real in the HPO using nasbenchs training hp for 1 epoch to get a fairer hpo signal and I would not have the problem of unfair hyper band prunning
+
+# this tries to avoid the oracle problem in which the ibo is probably a lot more influencial in the hp than the oneshots hpo
+# also saves the comp budget for the first stage in the final setting which is a huge deal
+
+# 1. HPO Phase (Wide & Narrow):
+
+# Action: Use a fair, noisy signal for all methods.
+# One-Shot: Real validation accuracy after a few epochs.
+# Two-Stage (BANANAS): Query the benchmark for early-epoch (e.g., 12-epoch) accuracy. This is fast but provides a noisy signal comparable to the one-shot method.
+# Outcome: The HPO is fair. It finds the best hyperparameters for algorithms working with realistic, limited information.
+# 2. Final Comparison Run (Multiple Seeds):
+
+# One-Stage Method (e.g., GSparsity):
+# Time: Measure the real wall-clock time for its 100-epoch search.
+# Performance: Query the 200-epoch accuracy of the final architecture.
+# Two-Stage Method (BANANAS + GSparsity):
+# Time (Stage 1): Sum the train_time for all 200-epoch queries and multiply by your computational_factor.
+# Time (Stage 2): Measure the real wall-clock time for its 100-epoch search.
+# Total Time: (Simulated Time from Stage 1) + (Real Time from Stage 2).
+# Performance: Query the 200-epoch accuracy of the final architecture.
+# Baseline (Random Search):
+# Time: Sum the train_time for all 200-epoch queries and multiply by your computational_factor.
+# Performance: The 200-epoch accuracy of the best architecture found.
+
+
+# Run the search algorithm for its budgeted duration.
+# For GSparsity, this means running the search for 1 epoch (or your defined HPO budget).
+# For Inverted BANANAS + GSparsity, this means running stage 1 for 1 epoch and stage 2 for 1 epoch.
+# Get the final, discretized architecture that the algorithm produces at the end of its run (optimizer.get_final_architecture()).
+# Query the benchmark for the 200-epoch validation accuracy of that specific final architecture.
+# Return this queried accuracy as the value for Optuna to maximize.
+
+
+#! Maybe I would have to actually implement my own BO instead of using inverted BANANAS as it is quite unfair that it directly gets a 200 epoch training signal instead of a couple of epochs
+
+
 # TODO Filter db to remove trials that would have not been permitted by the budget and create a new study with the filtered trials that I will use for importance checking and visualization
-# TODO Hyperparameter Importance
+# TODO save into lazygit and proceed with other tasks
+# TODO test hpo
+# TODO make a setting for one method each on cifar10 with in narrow search with seed as hpo and check its influence on the final arch
+# TODO save into lazygit and proceed with other tasks
 # TODO Visualizations of Hyperparameters check optnas possibilities
+# TODO test hpo
+# TODO save into lazygit and proceed with other tasks
+# TODO make HPO Plot / AUC HPO
+# TODO make Final Training Plot / AUC
+# TODO test Plotting for Gsparsity / ibogsnas (no zcp approach)
+# TODO make decision about ZCP normalization
+# TODO make decision about zcp size transformation (currently focus on middle of image despite random)
+
 # // TODO check validation batches into list
 # //batch_size: 64
 # //train_portion: 0.9466741536616483
@@ -62,6 +140,14 @@ from naslib.optimizers import (
     Inverted_Bananas_GsparseOptimizer,
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
+
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_optimizer import (
+    Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
+)
+from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+    Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
+)
+
 from naslib import utils
 from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
 from naslib.utils import (
@@ -80,7 +166,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling)",
+    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -209,6 +295,9 @@ evaluation = {
     "auxiliary_weight": 0.4,
 }
 
+#! maybe increase lr range
+# trial.suggest_float("learning_rate", 1e-4, 1e-1, log=True)
+
 
 def _clear_logging_handlers():
     """
@@ -245,7 +334,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "weight_decay": trial.suggest_float(
                     "weight_decay", 30.0, 150.0, log=True
                 ),
-                "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                 "normalization": trial.suggest_categorical(
                     "normalization", ["none", "mul", "div"]
                 ),
@@ -253,7 +341,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "normalization_exponent", 0.25, 0.75
                 ),
                 "learning_rate": trial.suggest_float(
-                    "learning_rate", 1e-4, 1e-2, log=True
+                    "learning_rate", 1e-4, 1e-1, log=True
                 ),
                 "momentum": trial.suggest_float("momentum", 0.7, 0.95),
                 "learning_rate_min": trial.suggest_float(
@@ -282,7 +370,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "normalization_exponent", 0.25, 0.75
                 ),
                 "learning_rate": trial.suggest_float(
-                    "learning_rate", 1e-4, 1e-2, log=True
+                    "learning_rate", 1e-4, 1e-1, log=True
                 ),
                 "momentum": trial.suggest_float("momentum", 0.7, 0.95),
                 "learning_rate_min": trial.suggest_float(
@@ -300,35 +388,25 @@ def objective(trial: optuna.trial.Trial) -> float:
             "search": {
                 "checkpoint_freq": 1,
                 "epochs": search_epochs,
-                "batch_size": trial.suggest_categorical(
-                    "ibg_batch_size", [32, 64, 128]
-                ),
-                "train_portion": trial.suggest_float("ibg_train_portion", 0.8, 0.99),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
             },
             # Stage 1 configuration (Inverted BANANAS)
             "stage1": {
                 "search": {
                     "epochs": search_epochs // 2,
-                    "k": trial.suggest_int("ibg_s1_k", 5, 20),
-                    "num_init": trial.suggest_int("ibg_s1_num_init", 5, 20),
-                    "num_ensemble": 5,
+                    "k": trial.suggest_int("k", 5, 20),
+                    "num_init": trial.suggest_int("num_init", 5, 20),
+                    "num_ensemble": trial.suggest_int("num_ensemble", 3, 7),
                     "predictor_type": trial.suggest_categorical(
-                        "ibg_s1_predictor_type", ["mlp", "lgb", "xgb", "rf"]
+                        "predictor_type",
+                        ["mlp", "lgb", "xgb", "rf", "ngb", "gcn", "gp"],
                     ),
                     "acq_fn_type": trial.suggest_categorical(
-                        "ibg_s1_acq_fn_type", ["its", "ucb", "ei"]
-                    ),
-                    "acq_fn_optimization": trial.suggest_categorical(
-                        "ibg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
+                        "acq_fn_type", ["its", "ucb", "ei"]
                     ),
                     "encoding_type": None,  # is useless as its set by the predictor type
-                    "num_arches_to_mutate": trial.suggest_int(
-                        "ibg_s1_num_arches_to_mutate", 1, 5
-                    ),
-                    "max_mutations": trial.suggest_int("ibg_s1_max_mutations", 1, 3),
-                    "num_candidates": trial.suggest_int(
-                        "ibg_s1_num_candidates", 50, 200
-                    ),
+                    "num_candidates": trial.suggest_int("num_candidates", 50, 200),
                     "removal_percentage": 1.0,
                 },
             },
@@ -337,26 +415,24 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "search": {
                     "epochs": search_epochs // 2,
                     "grad_clip": trial.suggest_categorical(
-                        "ibg_s2_grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                        "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
                     ),
                     "weight_decay": trial.suggest_float(
-                        "ibg_s2_weight_decay", 30.0, 150.0, log=True
+                        "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float(
-                        "ibg_s2_threshold", 1e-7, 1e-4, log=True
-                    ),
+                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
-                        "ibg_s2_normalization", ["none", "mul", "div"]
+                        "normalization", ["none", "mul", "div"]
                     ),
                     "normalization_exponent": trial.suggest_float(
-                        "ibg_s2_normalization_exponent", 0.25, 0.75
+                        "normalization_exponent", 0.25, 0.75
                     ),
                     "learning_rate": trial.suggest_float(
-                        "ibg_s2_learning_rate", 1e-4, 1e-2, log=True
+                        "learning_rate", 1e-4, 1e-1, log=True
                     ),
-                    "momentum": trial.suggest_float("ibg_s2_momentum", 0.7, 0.95),
+                    "momentum": trial.suggest_float("momentum", 0.7, 0.95),
                     "learning_rate_min": trial.suggest_float(
-                        "ibg_s2_learning_rate_min", 1e-5, 5e-4, log=True
+                        "learning_rate_min", 1e-5, 5e-4, log=True
                     ),
                 },
             },
@@ -366,35 +442,25 @@ def objective(trial: optuna.trial.Trial) -> float:
             "search": {
                 "checkpoint_freq": 1,
                 "epochs": search_epochs,
-                "batch_size": trial.suggest_categorical(
-                    "ibzg_batch_size", [32, 64, 128]
-                ),
-                "train_portion": trial.suggest_float("ibzg_train_portion", 0.8, 0.99),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
             },
             # Stage 1 configuration (Inverted BANANAS)
             "stage1": {
                 "search": {
                     "epochs": search_epochs // 2,
-                    "k": trial.suggest_int("ibzg_s1_k", 5, 20),
-                    "num_init": trial.suggest_int("ibzg_s1_num_init", 5, 20),
-                    "num_ensemble": 5,
+                    "k": trial.suggest_int("k", 5, 20),
+                    "num_init": trial.suggest_int("num_init", 5, 20),
+                    "num_ensemble": trial.suggest_int("num_ensemble", 3, 7),
                     "predictor_type": trial.suggest_categorical(
-                        "ibzg_s1_predictor_type", ["mlp", "lgb", "xgb", "rf"]
+                        "predictor_type",
+                        ["mlp", "lgb", "xgb", "rf", "ngb", "gcn", "gp"],
                     ),
                     "acq_fn_type": trial.suggest_categorical(
-                        "ibzg_s1_acq_fn_type", ["its", "ucb", "ei"]
-                    ),
-                    "acq_fn_optimization": trial.suggest_categorical(
-                        "ibzg_s1_acq_fn_optimization", ["mutation", "random_sampling"]
+                        "acq_fn_type", ["its", "ucb", "ei"]
                     ),
                     "encoding_type": None,  # is useless as its set by the predictor type
-                    "num_arches_to_mutate": trial.suggest_int(
-                        "ibzg_s1_num_arches_to_mutate", 1, 5
-                    ),
-                    "max_mutations": trial.suggest_int("ibzg_s1_max_mutations", 1, 3),
-                    "num_candidates": trial.suggest_int(
-                        "ibzg_s1_num_candidates", 50, 200
-                    ),
+                    "num_candidates": trial.suggest_int("num_candidates", 50, 200),
                     "removal_percentage": 1.0,
                 },
             },
@@ -403,26 +469,139 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "search": {
                     "epochs": search_epochs // 2,
                     "grad_clip": trial.suggest_categorical(
-                        "ibzg_s2_grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                        "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
                     ),
                     "weight_decay": trial.suggest_float(
-                        "ibzg_s2_weight_decay", 30.0, 150.0, log=True
+                        "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float(
-                        "ibzg_s2_threshold", 1e-7, 1e-4, log=True
-                    ),
+                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
-                        "ibzg_s2_normalization", ["none", "mul", "div"]
+                        "normalization", ["none", "mul", "div"]
                     ),
                     "normalization_exponent": trial.suggest_float(
-                        "ibzg_s2_normalization_exponent", 0.25, 0.75
+                        "normalization_exponent", 0.25, 0.75
                     ),
                     "learning_rate": trial.suggest_float(
-                        "ibzg_s2_learning_rate", 1e-4, 1e-2, log=True
+                        "learning_rate", 1e-4, 1e-1, log=True
                     ),
-                    "momentum": trial.suggest_float("ibzg_s2_momentum", 0.7, 0.95),
+                    "momentum": trial.suggest_float("momentum", 0.7, 0.95),
                     "learning_rate_min": trial.suggest_float(
-                        "ibzg_s2_learning_rate_min", 1e-5, 5e-4, log=True
+                        "learning_rate_min", 1e-5, 5e-4, log=True
+                    ),
+                    "zcp_method": zcp_method,
+                },
+            },
+        }
+    elif optimizer_type == "self_training_inverted_bananas_gsparsity":
+        config = {
+            "search": {
+                "checkpoint_freq": 1,
+                "epochs": search_epochs,
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+                "use_real_time": True,
+            },
+            # Stage 1 configuration (Self-Training Inverted BANANAS)
+            "stage1": {
+                "search": {
+                    # "epochs": search_epochs // 2,
+                    "epochs": 1,  # For HPO, we only train for 1 epoch
+                    "train_epochs": 1,  # For HPO, we only train for 1 epoch
+                    "k": trial.suggest_int("k", 5, 20),
+                    "num_init": trial.suggest_int("num_init", 5, 20),
+                    "num_ensemble": trial.suggest_int("num_ensemble", 3, 7),
+                    "predictor_type": trial.suggest_categorical(
+                        "predictor_type",
+                        ["mlp", "lgb", "xgb", "rf", "ngb", "gcn", "gp"],
+                    ),
+                    "acq_fn_type": trial.suggest_categorical(
+                        "acq_fn_type", ["its", "ucb", "ei"]
+                    ),
+                    "encoding_type": None,
+                    "num_candidates": trial.suggest_int("num_candidates", 50, 200),
+                    "removal_percentage": 1.0,
+                },
+            },
+            # Stage 2 configuration (GSparsity)
+            "stage2": {
+                "search": {
+                    "epochs": 1,
+                    "grad_clip": trial.suggest_categorical(
+                        "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                    ),
+                    "weight_decay": trial.suggest_float(
+                        "weight_decay", 30.0, 150.0, log=True
+                    ),
+                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "normalization": trial.suggest_categorical(
+                        "normalization", ["none", "mul", "div"]
+                    ),
+                    "normalization_exponent": trial.suggest_float(
+                        "normalization_exponent", 0.25, 0.75
+                    ),
+                    "learning_rate": trial.suggest_float(
+                        "learning_rate", 1e-4, 1e-1, log=True
+                    ),
+                    "momentum": trial.suggest_float("momentum", 0.7, 0.95),
+                    "learning_rate_min": trial.suggest_float(
+                        "learning_rate_min", 1e-5, 5e-4, log=True
+                    ),
+                },
+            },
+        }
+    elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
+        config = {
+            "search": {
+                "checkpoint_freq": 1,
+                "epochs": search_epochs,
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+                "use_real_time": True,
+            },
+            # Stage 1 configuration (Self-Training Inverted BANANAS)
+            "stage1": {
+                "search": {
+                    # "epochs": search_epochs // 2,
+                    "epochs": 1,  # For HPO, we only train for 1 epoch
+                    "train_epochs": 1,  # For HPO, we only train for
+                    "k": trial.suggest_int("k", 5, 20),
+                    "num_init": trial.suggest_int("num_init", 5, 20),
+                    "num_ensemble": trial.suggest_int("num_ensemble", 3, 7),
+                    "predictor_type": trial.suggest_categorical(
+                        "predictor_type",
+                        ["mlp", "lgb", "xgb", "rf", "ngb", "gcn", "gp"],
+                    ),
+                    "acq_fn_type": trial.suggest_categorical(
+                        "acq_fn_type", ["its", "ucb", "ei"]
+                    ),
+                    "encoding_type": None,
+                    "num_candidates": trial.suggest_int("num_candidates", 50, 200),
+                    "removal_percentage": 1.0,
+                },
+            },
+            # Stage 2 configuration (ZCP GSparsity)
+            "stage2": {
+                "search": {
+                    "epochs": search_epochs // 2,
+                    "grad_clip": trial.suggest_categorical(
+                        "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                    ),
+                    "weight_decay": trial.suggest_float(
+                        "weight_decay", 30.0, 150.0, log=True
+                    ),
+                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "normalization": trial.suggest_categorical(
+                        "normalization", ["none", "mul", "div"]
+                    ),
+                    "normalization_exponent": trial.suggest_float(
+                        "normalization_exponent", 0.25, 0.75
+                    ),
+                    "learning_rate": trial.suggest_float(
+                        "learning_rate", 1e-4, 1e-1, log=True
+                    ),
+                    "momentum": trial.suggest_float("momentum", 0.7, 0.95),
+                    "learning_rate_min": trial.suggest_float(
+                        "learning_rate_min", 1e-5, 5e-4, log=True
                     ),
                     "zcp_method": zcp_method,
                 },
@@ -454,6 +633,8 @@ def objective(trial: optuna.trial.Trial) -> float:
         "zcp_gsparsity",
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         cutout = trial.suggest_categorical("cutout", [False, True])
         if cutout:
@@ -462,12 +643,34 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "cutout_length", 8, 24
             )
             config["search"]["cutout_prob"] = trial.suggest_float(
-                "cutout_prob", 0.1, 0.7
+                "cutout_prob", 0.1, 1.0
             )
         else:
             config["search"]["cutout"] = False
             config["search"]["cutout_length"] = 0
             config["search"]["cutout_prob"] = None
+
+    if optimizer_type in [
+        "inverted_bananas_gsparsity",
+        "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
+    ]:
+        acq_fn_optimization = trial.suggest_categorical(
+            "acq_fn_optimization", ["mutation", "random_sampling"]
+        )
+        if acq_fn_optimization == "mutation":
+            config["stage1"]["search"]["acq_fn_optimization"] = "mutation"
+            config["stage1"]["search"]["num_arches_to_mutate"] = trial.suggest_int(
+                "num_arches_to_mutate", 1, 5
+            )
+            config["stage1"]["search"]["max_mutations"] = trial.suggest_int(
+                "max_mutations", 1, 3
+            )
+        else:
+            config["stage1"]["search"]["acq_fn_optimization"] = "random_sampling"
+            config["stage1"]["search"]["num_arches_to_mutate"] = 0
+            config["stage1"]["search"]["max_mutations"] = 0
 
     # Add common evaluation config
     config["evaluation"] = evaluation
@@ -480,6 +683,8 @@ def objective(trial: optuna.trial.Trial) -> float:
     if optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         # For two-stage, set 1 epoch for each stage
         config.search.epochs = 2
@@ -545,6 +750,8 @@ def update_config(
         or optimizer_type == "drnas"
         or optimizer_type == "inverted_bananas_gsparsity"
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
+        or optimizer_type == "self_training_inverted_bananas_gsparsity"
+        or optimizer_type == "self_training_inverted_bananas_zcp_gsparsity"
     ):
         config.save_arch_weights = False
 
@@ -668,7 +875,6 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
         fvcore_logger.setLevel(logging.INFO)
         # Prevent fvcore messages from being propagated to ancestor loggers,
         # as they are now explicitly handled by the app_file_handler.
-        # This helps avoid duplicate messages if the root logger also has handlers (e.g., console).
         fvcore_logger.propagate = False
     else:
         # Log a warning if the file handler couldn't be found, as fvcore logs might not be saved.
@@ -709,6 +915,10 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
         optimizer = Inverted_Bananas_GsparseOptimizer(config)
     elif optimizer_type == "inverted_bananas_zcp_gsparsity":
         optimizer = Inverted_Bananas_ZCP_GsparseOptimizer(config)
+    elif optimizer_type == "self_training_inverted_bananas_gsparsity":
+        optimizer = SelfTrainingInvertedBananasGsparse(config)
+    elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
+        optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
@@ -735,6 +945,8 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     elif optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         # For two-stage optimizers
         train_loader = None
@@ -754,6 +966,8 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     if optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         from naslib.defaults.two_stage_trainer_multi_dataloading_workers import Trainer
 
@@ -838,6 +1052,8 @@ def main():
     if optimizer_type in [
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "self_training_inverted_bananas_gsparsity",
+        "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         max_res = 2
     else:
@@ -846,12 +1062,26 @@ def main():
     sampler = DEHBSampler(seed=seed)
     pruner = DEHBPruner(min_resource=1, max_resource=max_res, reduction_factor=3)
 
+    # Define storage path for the Optuna study database
+    # This creates a unique database for each optimizer/dataset combination
+    # inside the main output directory.
+    db_dir = os.path.join(out_dir, "optuna_db")
+    os.makedirs(db_dir, exist_ok=True)
+    storage_name = (
+        f"sqlite:///{os.path.join(db_dir, f'{optimizer_type}_{dataset}_{seed}.db')}"
+    )
+    study_name = f"{optimizer_type}-{search_space_type}-{dataset}-{seed}"
+
+    print(f"Using Optuna study '{study_name}' in database '{storage_name}'")
+
     # Create study
     study = optuna.create_study(
+        storage=storage_name,
+        load_if_exists=True,
         sampler=sampler,
         pruner=pruner,
         direction="maximize",  # We maximize validation accuracy.
-        study_name=f"{optimizer_type}-{search_space_type}-{dataset}-{seed}",
+        study_name=study_name,
     )
 
     # Start optimization
@@ -860,11 +1090,45 @@ def main():
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 
+    # --- Hyperparameter Importance Analysis (Post-Run) ---
+    print("\n--- Hyperparameter Importance Analysis ---")
+    try:
+        # By default, get_param_importances only uses successfully completed trials (TrialState.COMPLETE).
+        # This is the correct behavior, as pruned trials do not have a final, comparable objective value.
+        completed_trials = study.get_trials(
+            deepcopy=False, states=[TrialState.COMPLETE]
+        )
+        if len(completed_trials) > 1:
+            param_importances = optuna.importance.get_param_importances(study)
+
+            print("Parameter importances (fANOVA):")
+            sorted_importances = sorted(
+                param_importances.items(), key=lambda x: x[1], reverse=True
+            )
+            for param, importance in sorted_importances:
+                print(f"  {param}: {importance:.4f}")
+
+            # Visualize and save the importances plot
+            fig = optuna.visualization.plot_param_importances(study)
+            plot_path = os.path.join(
+                out_dir, f"{optimizer_type}_{dataset}_{seed}_param_importances.html"
+            )
+            fig.write_html(plot_path)
+            print(f"\nSaved parameter importance plot to: {plot_path}")
+        else:
+            print(
+                "Skipping importance analysis: not enough completed trials to analyze."
+            )
+
+    except Exception as e:
+        print(f"Could not calculate or plot parameter importances: {e}")
+    # --- End of Analysis ---
+
     # Print results
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
 
-    print("Study statistics: ")
+    print("\nStudy statistics: ")
     print(f"  Number of finished trials: {len(study.trials)}")
     print(f"  Number of pruned trials: {len(pruned_trials)}")
     print(f"  Number of complete trials: {len(complete_trials)}")

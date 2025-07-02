@@ -78,7 +78,9 @@ class Bananas(MetaOptimizer):
 
         # New attributes for real training
         self.train_epochs = (
-            config.search.train_epochs if hasattr(config.search, "train_epochs") else 1
+            config.search.train_epochs
+            if hasattr(config.search, "train_epochs")
+            else 200
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

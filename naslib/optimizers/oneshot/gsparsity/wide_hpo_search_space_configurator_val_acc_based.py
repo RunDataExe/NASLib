@@ -499,7 +499,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "epochs": search_epochs,
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
-                "use_real_time": True,
+                "use_real_time": False,
             },
             # Stage 1 configuration (Self-Training Inverted BANANAS)
             "stage1": {
@@ -556,7 +556,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "epochs": search_epochs,
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
-                "use_real_time": True,
+                "use_real_time": False,
             },
             # Stage 1 configuration (Self-Training Inverted BANANAS)
             "stage1": {
@@ -755,12 +755,23 @@ def update_config(
     ):
         config.save_arch_weights = False
 
-    # Load computational factor and set scaling epochs for any method that might query a benchmark
-    comp_factor_path = os.path.join(
-        "naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_factor",
-        dataset,
-        "results.json",
-    )
+    is_self_training = "self_training" in optimizer_type
+
+    if is_self_training:
+        # Use the new computational factor for self-training methods
+        comp_factor_path = os.path.join(
+            "naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification_and_computational_factor/self_training_inverted_bananas/nasbench201",
+            dataset,
+            "results.json",
+        )
+    else:
+        # Use the existing computational factor for query-based methods
+        comp_factor_path = os.path.join(
+            "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor",
+            dataset,
+            "results.json",
+        )
+
     comp_factor = 1.0  # Default value
     if os.path.exists(comp_factor_path):
         try:
@@ -769,7 +780,9 @@ def update_config(
                 comp_factor = data["summary"]["part_time_computational_factor"][
                     "average"
                 ]
-            logging.info(f"Loaded computational factor {comp_factor} for {dataset}")
+            logging.info(
+                f"Loaded computational factor {comp_factor} for {dataset} from {comp_factor_path}"
+            )
         except Exception as e:
             logging.warning(
                 f"Warning: Could not load computational factor from {comp_factor_path}. Using default {comp_factor}. Error: {e}"
@@ -780,11 +793,42 @@ def update_config(
         )
     config.search.comp_factor = comp_factor
 
-    # Set the number of epochs to scale queried time by (e.g., NB201 archs are trained for 200 epochs)
+    # Set the number of epochs to scale queried time by.
     if search_space_type == "nasbench201":
-        config.search.scaling_factor_epochs = 200
+        if is_self_training and not getattr(config.search, "use_real_time", False):
+            # Self-training that queries the benchmark.
+            # The benchmark returns time for 200 epochs. We scale it to the desired `train_epochs`.
+            train_epochs = (
+                config.stage1.search.train_epochs
+                if "stage1" in config
+                else config.search.train_epochs
+            )
+            config.search.scaling_factor_epochs = train_epochs
+            logging.info(
+                f"Self-training (query-based): Scaling NB201 time by train_epochs = {train_epochs}."
+            )
+        elif not is_self_training:
+            # Standard query-based methods. We want the full 200-epoch time.
+            config.search.scaling_factor_epochs = 200
+            logging.info(f"Query-based: Scaling NB201 time by fixed 200 epochs.")
+        else:
+            # This covers self-training with use_real_time=True
+            config.search.scaling_factor_epochs = 1.0
+            logging.info(
+                "Self-training (real-time): Using measured time. Scaling factor is 1.0."
+            )
     else:
         config.search.scaling_factor_epochs = 1  # Default for other search spaces
+
+    # If use_real_time is set, we use the actual measured time from self-training optimizers.
+    # The trainer multiplies the returned time by these factors, so we set them to 1.
+    if getattr(config.search, "use_real_time", False):
+        config.search.comp_factor = 1.0
+        config.search.scaling_factor_epochs = 1.0
+        logging.info(
+            f"Optimizer '{optimizer_type}' has 'use_real_time' set. "
+            f"Setting comp_factor and scaling_factor_epochs to 1.0 to use real runtime."
+        )
 
     config.dataset = dataset
 

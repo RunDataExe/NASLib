@@ -289,7 +289,40 @@ class Trainer(object):
                 logging.info(
                     f"Using scaling factor {scaling_epochs} for scaling runtime."
                 )
-                scaled_runtime = train_time * scaling_epochs * comp_factor
+
+                # Determine the type of optimizer to apply the correct runtime scaling.
+                # Self-training optimizers have a `_train_and_evaluate_arch` method.
+                # For meta-optimizers, we check their sub-optimizers.
+                is_self_training = hasattr(self.optimizer, "_train_and_evaluate_arch")
+                if not is_self_training and hasattr(self.optimizer, "stage1_optimizer"):
+                    is_self_training = hasattr(
+                        self.optimizer.stage1_optimizer, "_train_and_evaluate_arch"
+                    )
+
+                is_real_time = getattr(self.config.search, "use_real_time", False)
+
+                if is_self_training and is_real_time:
+                    # Case 3: Real-time Self-Training. Use the measured time directly.
+                    # The configurator sets comp_factor and scaling_epochs to 1.
+                    scaled_runtime = train_time * comp_factor
+                    logging.info(
+                        f"Real-time self-training runtime: train_time:{train_time} * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                    )
+                elif is_self_training and not is_real_time:
+                    # Case 2: Query-based Self-Training. Scale the 200-epoch time by train_epochs/200.
+                    # The configurator sets scaling_epochs to train_epochs.
+                    scaled_runtime = train_time * comp_factor
+                    logging.info(
+                        f"Query-based self-training runtime: train_time:{train_time} * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                    )
+                else:
+                    # Case 1: Standard Query-based method. train_time is the total time for 200 epochs.
+                    # We only apply the computational factor.
+                    scaled_runtime = train_time * scaling_epochs * comp_factor
+                    logging.info(
+                        f"Standard query-based runtime: train_time:{train_time} * scaling_epochs:{scaling_epochs} [if 200 -> nasbench201] * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                    )
+
                 self.search_trajectory.runtime.append(scaled_runtime)
                 self.search_trajectory.train_time.append(train_time)
                 self.train_top1.avg = train_acc

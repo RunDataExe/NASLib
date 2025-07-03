@@ -110,6 +110,11 @@ zcp_method = args.zcp_method
 resume = args.resume
 
 
+# Standard Query-based: comp_factor * scaling_epochs 200
+# Query-based Self-Training: scaling_epochs / 200 * comp_factor
+# Real-time Self-Training: comp_factor = 1; scaling_epochs = 1.0
+
+
 # Maybe the problem is also related to the change of the logger in the configurator. As the statedict in the log says it is not complete thus the checkpoint after completing one epoch with gsparsity should also contain less. Or is this the case and my logging / printing information is just not nuanced enough to capture this?
 
 # have look at log.log file
@@ -432,8 +437,8 @@ optimizer_configs = {
             "num_arches_to_mutate": 1,
             "max_mutations": 1,
             "num_candidates": 100,
-            "train_epochs": 200,  #!
-            "use_real_time": True,
+            "train_epochs": 2,  #!
+            "use_real_time": False,
         },
     },
     "self_training_inverted_bananas_gsparsity": {
@@ -445,7 +450,7 @@ optimizer_configs = {
             "cutout": False,
             "cutout_length": 16,
             # "use_real_time": True, #!
-            "use_real_time": False,
+            "use_real_time": True,
         },
         # Stage 1 configuration (Self-Training Inverted BANANAS)
         "stage1": {
@@ -546,11 +551,24 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         or optimizer_type == "self_training_inverted_bananas_gsparsity"
     ):
         config.save_arch_weights = False
-    comp_factor_path = os.path.join(
-        "naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_factor",
-        dataset,
-        "results.json",
-    )
+
+    is_self_training = "self_training" in optimizer_type
+
+    if is_self_training:
+        # Use the new computational factor for self-training methods
+        comp_factor_path = os.path.join(
+            "naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification_and_computational_factor/self_training_inverted_bananas/nasbench201",
+            dataset,
+            "results.json",
+        )
+    else:
+        # Use the existing computational factor for query-based methods
+        comp_factor_path = os.path.join(
+            "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor",
+            dataset,
+            "results.json",
+        )
+
     comp_factor = 1.0  # Default value
     if os.path.exists(comp_factor_path):
         try:
@@ -559,7 +577,9 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
                 comp_factor = data["summary"]["part_time_computational_factor"][
                     "average"
                 ]
-            logging.info(f"Loaded computational factor {comp_factor} for {dataset}")
+            logging.info(
+                f"Loaded computational factor {comp_factor} for {dataset} from {comp_factor_path}"
+            )
         except Exception as e:
             logging.warning(
                 f"Warning: Could not load computational factor from {comp_factor_path}. Using default {comp_factor}. Error: {e}"
@@ -570,9 +590,30 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         )
     config.search.comp_factor = comp_factor
 
-    # Set the number of epochs to scale queried time by (e.g., NB201 archs are trained for 200 epochs)
+    # Set the number of epochs to scale queried time by.
     if search_space_type == "nasbench201":
-        config.search.scaling_factor_epochs = 200
+        if is_self_training and not getattr(config.search, "use_real_time", False):
+            # Self-training that queries the benchmark.
+            # The benchmark returns time for 200 epochs. We scale it to the desired `train_epochs`.
+            train_epochs = (
+                config.stage1.search.train_epochs
+                if "stage1" in config
+                else config.search.train_epochs
+            )
+            config.search.scaling_factor_epochs = train_epochs
+            logging.info(
+                f"Self-training (query-based): Scaling NB201 time by train_epochs = {train_epochs}."
+            )
+        elif not is_self_training:
+            # Standard query-based methods. We want the full 200-epoch time.
+            config.search.scaling_factor_epochs = 200
+            logging.info(f"Query-based: Scaling NB201 time by fixed 200 epochs.")
+        else:
+            # This covers self-training with use_real_time=True
+            config.search.scaling_factor_epochs = 1.0
+            logging.info(
+                "Self-training (real-time): Using measured time. Scaling factor is 1.0."
+            )
     else:
         config.search.scaling_factor_epochs = 1  # Default for other search spaces
 

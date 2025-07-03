@@ -76,6 +76,28 @@ def main(args):
     """
     Main function to compare queried vs. local results and generate a summary.
     """
+    # --- Safety Checks ---
+    if not args.used_scaled_queried_runtimes:
+        logging.error(
+            "Error: You must confirm that the 'queried' runtimes have been scaled to the target environment "
+            "(e.g., 12,4 workers). Please add the '--used_scaled_queried_runtimes' flag to proceed."
+        )
+        return
+
+    if not args.used_real_self_training_runtime:
+        logging.error(
+            "Error: You must confirm that the 'self-training' experiment was run with 'use_real_time=True'. "
+            "Please add the '--used_real_self_training_runtime' flag to proceed."
+        )
+        return
+
+    if not args.confirm_200_epochs:
+        logging.error(
+            "Error: You must confirm that both experiments were run for 200 training epochs to ensure a "
+            "correct comparison. Please add the '--confirm_200_epochs' flag to proceed."
+        )
+        return
+
     queried_exp_name = "inverted_bananas"
     local_exp_name = "self_training_inverted_bananas"
 
@@ -274,13 +296,24 @@ if __name__ == "__main__":
         required=True,
         help="Path to the output JSON file for the comparison summary.",
     )
+    # --- Safety Checklist Arguments ---
     parser.add_argument(
-        "--scale_local_runtimes",
-        type=bool,
-        default=False,
+        "--used_scaled_queried_runtimes",
         required=True,
-        help="This argument is no longer used for calculation but is kept for compatibility. "
-        "The script now defaults to calculating the runtime factor.",
+        default=False,
+        help="[Safety Check] Set this flag to confirm that the 'queried' experiment's runtimes are scaled (e.g., for 12,4 workers).",
+    )
+    parser.add_argument(
+        "--used_real_self_training_runtime",
+        required=True,
+        default=False,
+        help="[Safety Check] Set this flag to confirm that the 'self-training' experiment was run with 'use_real_time=True'.",
+    )
+    parser.add_argument(
+        "--confirm_200_epochs",
+        required=True,
+        default=False,
+        help="[Safety Check] Set this flag to confirm that both experiments were run for 200 epochs.",
     )
     script_args = parser.parse_args()
 

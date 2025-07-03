@@ -32,7 +32,9 @@ def find_and_load_results(base_dir, experiment_name):
                 dataset_name = parts[-2]
                 search_space = parts[-3]
             except IndexError:
-                logging.warning(f"Could not determine metadata for path {root}. Skipping.")
+                logging.warning(
+                    f"Could not determine metadata for path {root}. Skipping."
+                )
                 continue
 
             file_path = os.path.join(root, "errors.json")
@@ -54,7 +56,13 @@ def find_and_load_results(base_dir, experiment_name):
 def calculate_stats(data_list):
     """Helper to calculate summary statistics for a list of numbers."""
     if not data_list:
-        return {}
+        return {
+            "average": 0.0,
+            "std_dev": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "count": 0,
+        }
     return {
         "average": float(np.mean(data_list)),
         "std_dev": float(np.std(data_list)),
@@ -106,20 +114,80 @@ def main(args):
             logging.warning(f"No common seeds for dataset {dataset}. Skipping.")
             continue
 
-        dataset_epoch_data = defaultdict(lambda: defaultdict(list))
-
+        # --- New Runtime Computational Factor Logic ---
+        all_runtime_ratios = []
         for seed in common_seeds:
             queried_data = queried_seeds[seed]
             local_data = local_seeds[seed]
 
+            queried_runtimes = queried_data.get("runtime", [])
+            local_runtimes = local_data.get("runtime", [])
+            num_epochs = min(len(queried_runtimes), len(local_runtimes))
+
+            for epoch in range(num_epochs):
+                q_rt = queried_runtimes[epoch]
+                l_rt = local_runtimes[epoch]
+
+                if l_rt > 1e-6:
+                    # This ratio represents the scaling factor.
+                    # e.g., if q_rt is 10s and l_rt is 40s, the ratio is 0.25.
+                    # This means the local run would be 0.25x as fast with more workers.
+                    ratio = q_rt / l_rt
+                    all_runtime_ratios.append(ratio)
+                else:
+                    logging.warning(
+                        f"[{dataset}/{seed}] Local runtime for epoch {epoch} is near zero. Skipping ratio calculation for this epoch."
+                    )
+
+        # Calculate summary statistics for the runtime factor
+        runtime_factor_stats = calculate_stats(all_runtime_ratios)
+        logging.info(
+            f"[{dataset}] Calculated Runtime Computational Factor. "
+            f"Average: {runtime_factor_stats['average']:.4f}, StdDev: {runtime_factor_stats['std_dev']:.4f}"
+        )
+
+        # Structure the output to match the desired format for loading
+        comp_factor_output = {
+            "summary": {"part_time_computational_factor": runtime_factor_stats},
+            "details": {
+                "info": "The 'part_time_computational_factor' is the average ratio of (queried_runtime / local_runtime) per epoch.",
+                "individual_ratios": all_runtime_ratios,
+            },
+        }
+
+        # Save the computational factor results to the 'self_training' directory
+        output_dir = os.path.join(args.base_dir, local_exp_name, "nasbench201", dataset)
+        os.makedirs(output_dir, exist_ok=True)
+        results_json_path = os.path.join(output_dir, "results.json")
+        try:
+            with open(results_json_path, "w") as f:
+                json.dump(comp_factor_output, f, indent=4)
+            logging.info(
+                f"Saved runtime computational factor for dataset '{dataset}' to: {results_json_path}"
+            )
+        except IOError as e:
+            logging.error(
+                f"Failed to write computational factor results to {results_json_path}: {e}"
+            )
+
+        # --- Original Epoch-wise Comparison Logic (for summary.json) ---
+        dataset_epoch_data = defaultdict(lambda: defaultdict(list))
+        for seed in common_seeds:
+            queried_data = queried_seeds[seed]
+            local_data = local_seeds[seed]
             for metric in metrics_to_compare:
                 q_values = queried_data.get(metric, [])
                 l_values = local_data.get(metric, [])
                 num_epochs = min(len(q_values), len(l_values))
 
                 for epoch in range(num_epochs):
-                    dataset_epoch_data[epoch][f"queried_{metric}"].append(q_values[epoch])
+                    dataset_epoch_data[epoch][f"queried_{metric}"].append(
+                        q_values[epoch]
+                    )
                     dataset_epoch_data[epoch][f"local_{metric}"].append(l_values[epoch])
+                    dataset_epoch_data[epoch][f"diff_{metric}"].append(
+                        q_values[epoch] - l_values[epoch]
+                    )
 
         # 1. Per-epoch comparison for the current dataset
         dataset_per_epoch_summary = {}
@@ -128,9 +196,11 @@ def main(args):
             for metric in metrics_to_compare:
                 queried_key = f"queried_{metric}"
                 local_key = f"local_{metric}"
+                diff_key = f"diff_{metric}"
                 epoch_summary[metric] = {
                     "queried": calculate_stats(data[queried_key]),
                     "local": calculate_stats(data[local_key]),
+                    "queried_minus_local": calculate_stats(data[diff_key]),
                 }
             dataset_per_epoch_summary[f"epoch_{epoch}"] = epoch_summary
         comparison_summary["per_dataset_per_epoch"][dataset] = dataset_per_epoch_summary
@@ -138,16 +208,33 @@ def main(args):
         # 2. Across-all-epochs comparison for the current dataset
         dataset_all_epochs_summary = {}
         for metric in metrics_to_compare:
-            all_queried = [v for e in dataset_epoch_data for v in dataset_epoch_data[e][f"queried_{metric}"]]
-            all_local = [v for e in dataset_epoch_data for v in dataset_epoch_data[e][f"local_{metric}"]]
+            all_queried = [
+                v
+                for e in dataset_epoch_data
+                for v in dataset_epoch_data[e][f"queried_{metric}"]
+            ]
+            all_local = [
+                v
+                for e in dataset_epoch_data
+                for v in dataset_epoch_data[e][f"local_{metric}"]
+            ]
+            all_diffs = [
+                v
+                for e in dataset_epoch_data
+                for v in dataset_epoch_data[e][f"diff_{metric}"]
+            ]
             dataset_all_epochs_summary[metric] = {
                 "queried": calculate_stats(all_queried),
                 "local": calculate_stats(all_local),
+                "queried_minus_local": calculate_stats(all_diffs),
             }
             # Aggregate for overall summary
             all_datasets_data[metric]["queried"].extend(all_queried)
             all_datasets_data[metric]["local"].extend(all_local)
-        comparison_summary["per_dataset_all_epochs"][dataset] = dataset_all_epochs_summary
+            all_datasets_data[metric]["diff"].extend(all_diffs)
+        comparison_summary["per_dataset_all_epochs"][dataset] = (
+            dataset_all_epochs_summary
+        )
 
     # 3. Across-all-epochs and all-datasets comparison
     all_datasets_summary = {}
@@ -155,6 +242,7 @@ def main(args):
         all_datasets_summary[metric] = {
             "queried": calculate_stats(all_datasets_data[metric]["queried"]),
             "local": calculate_stats(all_datasets_data[metric]["local"]),
+            "queried_minus_local": calculate_stats(all_datasets_data[metric]["diff"]),
         }
     comparison_summary["all_datasets_all_epochs"] = all_datasets_summary
 
@@ -178,13 +266,21 @@ if __name__ == "__main__":
         "--base_dir",
         type=str,
         required=True,
-        help="The base directory containing the experiment folders (e.g., 'naslib/optimizers/oneshot/gsparsity/submission_scripts/computational_factor/').",
+        help="The base directory containing the experiment folders (e.g., 'naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification_and_computational_factor/').",
     )
     parser.add_argument(
         "--output_file",
         type=str,
         required=True,
         help="Path to the output JSON file for the comparison summary.",
+    )
+    parser.add_argument(
+        "--scale_local_runtimes",
+        type=bool,
+        default=False,
+        required=True,
+        help="This argument is no longer used for calculation but is kept for compatibility. "
+        "The script now defaults to calculating the runtime factor.",
     )
     script_args = parser.parse_args()
 

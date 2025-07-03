@@ -6,17 +6,17 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=16
-#SBATCH --job-name=ib_imagenet_1544457859
-#SBATCH --output=naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification/slurm_logs/ImageNet16-120/slurm_ib_imagenet_1544457859_%j.out
+#SBATCH --job-name=ib_cifar10_1544457859
+#SBATCH --output=naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification_and_computational_factor/slurm_logs/cifar10/slurm_ib_cifar10_1544457859_%j.out
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=ruben.weber@students.uni-mannheim.de
 
 python naslib/optimizers/oneshot/gsparsity/configurator.py \
     --optimizer inverted_bananas \
     --search_space nasbench201 \
-    --dataset ImageNet16-120 \
+    --dataset cifar10 \
     --seed 1544457859 \
-    --out_dir naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification \
+    --out_dir naslib/optimizers/oneshot/gsparsity/submission_scripts/self_training_bananas_verification_and_computational_factor \
     --search_epochs 3 \
     --eval_epochs 1 \
     --resume True

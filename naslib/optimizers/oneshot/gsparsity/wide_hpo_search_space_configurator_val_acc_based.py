@@ -334,6 +334,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "weight_decay": trial.suggest_float(
                     "weight_decay", 30.0, 150.0, log=True
                 ),
+                "threshold": None,  # Not used in the current implementation of GSparsity
+                # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                 "normalization": trial.suggest_categorical(
                     "normalization", ["none", "mul", "div"]
                 ),
@@ -362,7 +364,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                 "weight_decay": trial.suggest_float(
                     "weight_decay", 30.0, 150.0, log=True
                 ),
-                "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                "threshold": None,  # Not used in the current implementation of GSparsity
+                # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                 "normalization": trial.suggest_categorical(
                     "normalization", ["none", "mul", "div"]
                 ),
@@ -420,7 +423,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "weight_decay": trial.suggest_float(
                         "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "threshold": None,  # Not used in the current implementation of GSparsity
+                    # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
                         "normalization", ["none", "mul", "div"]
                     ),
@@ -474,7 +478,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "weight_decay": trial.suggest_float(
                         "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "threshold": None,  # Not used in the current implementation of GSparsity
+                    # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
                         "normalization", ["none", "mul", "div"]
                     ),
@@ -532,7 +537,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "weight_decay": trial.suggest_float(
                         "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "threshold": None,  # Not used in the current implementation of GSparsity
+                    # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
                         "normalization", ["none", "mul", "div"]
                     ),
@@ -589,7 +595,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                     "weight_decay": trial.suggest_float(
                         "weight_decay", 30.0, 150.0, log=True
                     ),
-                    "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                    "threshold": None,  # Not used in the current implementation of GSparsity
+                    # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
                     "normalization": trial.suggest_categorical(
                         "normalization", ["none", "mul", "div"]
                     ),

@@ -31,44 +31,48 @@ import torch
 # TODO check if HPO space makes sense and change it if necessary
 # TODO make use of sqlite db to store the results of the trials
 # TODO Hyperparameter Importance
-
-# * OPEN
-
-#! Today:
-
-# TODO save time into that DB or do I have to filter based on the trials made by naslib?
-
-# TODO save into lazygit and proceed with other tasks
-
-
-# TODO had deadlock problem with self_training_inverted_bananas_gsparsity (check if case for zcp version maybe reduce workers by 2-4 by counting how many loaders I need concurrently)
-
-
+# TODO also make comp factor for 0 workers such that I have fair comp for the self train bananas stuff (e.g. scale it up to the speed it would have with 12,4 workers)
 # TODO verify self_training_bananas
 # TODO verify self_training_inverted_bananas -> 200 epochs training vs querry based inverted bananas
-
-# TODO also make comp factor for 0 workers such that I have fair comp for the self train bananas stuff (e.g. scale it up to the speed it would have with 12,4 workers)
-
-
 # TODO enable correct usage of computational factor for first stage of self_training_inverted_bananas_gsparsity
 # TODO verify time for self_training_inverted_bananas_gsparsity
 # TODO use computational factor for first stage of self_training_inverted_bananas_zcp_gsparsity
-# TODO verify time for self_training_inverted_bananas_zcp_gsparsity
+# TODO Filter db to remove trials that would have not been permitted by the budget and create a new study with the filtered trials that I will use for importance checking and visualization
+# TODO check if log.log for selftraining_inverted and inverted gives the same
+# TODO enable that new trials can be added to a study if the same setting is reran (check if runtime would exceed / is exeeded, before you allow (trials naslib))
+# * OPEN
+#! Today:
 
+# TODO verify time for self_training_inverted_bananas_ methods in logs/errors.json
+# TODO check epochs that the methods run in WHPO
+# TODO check hpo such that the studies are not pruned for wide search space or that the importance analysis is using pruned and completed for this part of the study
+# TODO optuna visualization
+# TODO save into lazygit and proceed with other tasks
+# TODO make HPO Plot / AUC HPO
+# TODO make Final Training Plot / AUC / cumulative AUC
+# TODO make first test plots to show in presentation
+# TODO make presentation slides
+
+# TODO make decision about ZCP normalization
+# TODO make decision about Dimensionality of Synthetic net
+# TODO make decision about zcp size transformation (currently focus on middle of image despite random)
+
+
+# TODO script that takes the best hp per method / dataset combination and creates slurm scripts for each run
+
+# TODO implement early stopping for the methods such that they are trained till convergence not till fixed point
+
+# TODO enable seed tuning
 
 # Would be even better if I ran BANANAS for real in the HPO using nasbenchs training hp for 1 epoch to get a fairer hpo signal and I would not have the problem of unfair hyper band prunning
-
 # this tries to avoid the oracle problem in which the ibo is probably a lot more influencial in the hp than the oneshots hpo
 # also saves the comp budget for the first stage in the final setting which is a huge deal
-
 # 1. HPO Phase (Wide & Narrow):
-
 # Action: Use a fair, noisy signal for all methods.
 # One-Shot: Real validation accuracy after a few epochs.
 # Two-Stage (BANANAS): Query the benchmark for early-epoch (e.g., 12-epoch) accuracy. This is fast but provides a noisy signal comparable to the one-shot method.
 # Outcome: The HPO is fair. It finds the best hyperparameters for algorithms working with realistic, limited information.
 # 2. Final Comparison Run (Multiple Seeds):
-
 # One-Stage Method (e.g., GSparsity):
 # Time: Measure the real wall-clock time for its 100-epoch search.
 # Performance: Query the 200-epoch accuracy of the final architecture.
@@ -81,7 +85,6 @@ import torch
 # Time: Sum the train_time for all 200-epoch queries and multiply by your computational_factor.
 # Performance: The 200-epoch accuracy of the best architecture found.
 
-
 # Run the search algorithm for its budgeted duration.
 # For GSparsity, this means running the search for 1 epoch (or your defined HPO budget).
 # For Inverted BANANAS + GSparsity, this means running stage 1 for 1 epoch and stage 2 for 1 epoch.
@@ -89,23 +92,13 @@ import torch
 # Query the benchmark for the 200-epoch validation accuracy of that specific final architecture.
 # Return this queried accuracy as the value for Optuna to maximize.
 
-
-#! Maybe I would have to actually implement my own BO instead of using inverted BANANAS as it is quite unfair that it directly gets a 200 epoch training signal instead of a couple of epochs
-
-
-# TODO Filter db to remove trials that would have not been permitted by the budget and create a new study with the filtered trials that I will use for importance checking and visualization
 # TODO save into lazygit and proceed with other tasks
 # TODO test hpo
 # TODO make a setting for one method each on cifar10 with in narrow search with seed as hpo and check its influence on the final arch
 # TODO save into lazygit and proceed with other tasks
-# TODO Visualizations of Hyperparameters check optnas possibilities
 # TODO test hpo
 # TODO save into lazygit and proceed with other tasks
-# TODO make HPO Plot / AUC HPO
-# TODO make Final Training Plot / AUC
 # TODO test Plotting for Gsparsity / ibogsnas (no zcp approach)
-# TODO make decision about ZCP normalization
-# TODO make decision about zcp size transformation (currently focus on middle of image despite random)
 
 # // TODO check validation batches into list
 # //batch_size: 64
@@ -114,7 +107,6 @@ import torch
 # //batch_size: 64
 # //train_portion: 0.856805511717202
 # //112 validation batches
-
 # ? Maybe also plot the loss lines to check for overfitting and so on
 
 
@@ -203,6 +195,9 @@ parser.add_argument(
     "--eval_epochs", type=int, default=600, help="Number of evaluation epochs"
 )
 parser.add_argument(
+    "--hpo_timeout", type=int, default=600, help="Timeout in seconds for the HPO study."
+)
+parser.add_argument(
     "--resume",
     type=bool,
     default=False,
@@ -221,6 +216,7 @@ search_epochs = args.search_epochs
 eval_epochs = args.eval_epochs
 zcp_method = args.zcp_method
 resume = args.resume
+hpo_timeout = args.hpo_timeout
 
 
 # Maybe the problem is also related to the change of the logger in the configurator. As the statedict in the log says it is not complete thus the checkpoint after completing one epoch with gsparsity should also contain less. Or is this the case and my logging / printing information is just not nuanced enough to capture this?
@@ -696,6 +692,7 @@ def objective(trial: optuna.trial.Trial) -> float:
         # For two-stage, set 1 epoch for each stage
         config.search.epochs = 2
         config.stage1.search.epochs = 1
+        config.stage1.search.train_epochs = 1
         config.stage2.search.epochs = 1
     else:
         # For one-stage methods, set 1 epoch
@@ -1118,10 +1115,15 @@ def main():
     # inside the main output directory.
     db_dir = os.path.join(out_dir, "optuna_db")
     os.makedirs(db_dir, exist_ok=True)
-    storage_name = (
-        f"sqlite:///{os.path.join(db_dir, f'{optimizer_type}_{dataset}_{seed}.db')}"
-    )
-    study_name = f"{optimizer_type}-{search_space_type}-{dataset}-{seed}"
+
+    # Construct a unique study name and database file path
+    study_name_parts = [optimizer_type, search_space_type, dataset, str(seed)]
+    if "zcp" in optimizer_type:
+        study_name_parts.append(zcp_method)
+
+    study_name = "-".join(study_name_parts)
+    db_filename = f"{study_name}.db"
+    storage_name = f"sqlite:///{os.path.join(db_dir, db_filename)}"
 
     print(f"Using Optuna study '{study_name}' in database '{storage_name}'")
 
@@ -1137,7 +1139,7 @@ def main():
 
     # Start optimization
     try:
-        study.optimize(objective, timeout=600)  # 10800
+        study.optimize(objective, timeout=hpo_timeout)
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 

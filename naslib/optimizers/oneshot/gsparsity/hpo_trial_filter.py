@@ -5,6 +5,7 @@ import shutil
 import optuna
 from optuna.trial import TrialState, FrozenTrial
 import logging
+import re
 
 # Setup basic logging
 logging.basicConfig(
@@ -12,34 +13,23 @@ logging.basicConfig(
 )
 
 
-def get_db_and_results_paths(
-    hpo_dir: str,
-    optimizer_type: str,
-    search_space: str,
-    dataset: str,
-    seed: int,
-    zcp_method: str = None,
-):
+def parse_study_name(study_name: str):
     """
-    Constructs the Optuna DB file path and the results directory path from arguments.
+    Parses the study name to extract optimizer, search_space, dataset, seed, and zcp_method.
+    Assumes format: {optimizer}-{search_space}-{dataset}-{seed} OR
+                     {optimizer}-{search_space}-{dataset}-{seed}-{zcp_method}
     """
-    # Construct DB path
-    db_dir = os.path.join(hpo_dir, "optuna_db")
-    db_name = f"{optimizer_type}_{dataset}_{seed}.db"
-    db_path = os.path.join(db_dir, db_name)
+    parts = study_name.split("-")
+    if len(parts) < 4:
+        raise ValueError(f"Study name '{study_name}' is not in the expected format.")
 
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(f"Optuna DB file not found at: {db_path}")
+    optimizer = parts[0]
+    search_space = parts[1]
+    dataset = parts[2]
+    seed = parts[3]
+    zcp_method = parts[4] if len(parts) > 4 else None
 
-    # Construct study name
-    study_name = f"{optimizer_type}-{search_space}-{dataset}-{seed}"
-
-    logging.info(f"Found database: {db_path}")
-    logging.info(f"Target study name: {study_name}")
-
-    # The results directory is the base HPO directory
-    results_dir = hpo_dir
-    return db_path, results_dir, study_name
+    return optimizer, search_space, dataset, int(seed), zcp_method
 
 
 def get_trial_runtime(
@@ -88,93 +78,85 @@ def get_trial_runtime(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Filter an Optuna study based on trial runtimes and re-evaluate hyperparameter importance."
+        description="Filter an Optuna study based on trial runtimes."
     )
     parser.add_argument(
-        "hpo_dir",
-        type=str,
-        help="Path to the main HPO results directory (e.g., 'naslib/optimizers/oneshot/gsparsity/test_hpo').",
-    )
-    parser.add_argument(
-        "--optimizer",
+        "--db_path",
         type=str,
         required=True,
-        help="Optimizer type (e.g., 'gsparsity', 'zcp_gsparsity').",
-    )
-    parser.add_argument(
-        "--search_space",
-        type=str,
-        required=True,
-        help="Search space (e.g., 'nasbench201').",
-    )
-    parser.add_argument(
-        "--dataset", type=str, required=True, help="Dataset (e.g., 'cifar10')."
-    )
-    parser.add_argument(
-        "--seed", type=int, required=True, help="The random seed of the HPO run."
-    )
-    parser.add_argument(
-        "--zcp_method",
-        type=str,
-        default=None,
-        help="ZCP method if applicable (e.g., 'jacov'). Required for ZCP-based optimizers.",
+        help="Path to the original Optuna SQLite database file.",
     )
     parser.add_argument(
         "--timeout",
         type=int,
         required=True,
-        help="The maximum permitted runtime for a single trial in seconds.",
+        help="The maximum cumulative runtime for all trials in seconds.",
     )
     args = parser.parse_args()
 
-    if "zcp" in args.optimizer and not args.zcp_method:
-        logging.error("The --zcp_method argument is required for ZCP-based optimizers.")
+    if not os.path.exists(args.db_path):
+        logging.error(f"Database file not found at: {args.db_path}")
         return
 
+    # --- Infer paths and names from the db_path ---
     try:
-        db_path, results_dir, study_name = get_db_and_results_paths(
-            args.hpo_dir,
-            args.optimizer,
-            args.search_space,
-            args.dataset,
-            args.seed,
-            args.zcp_method,
+        # Infer study name from the db filename
+        original_study_name = os.path.splitext(os.path.basename(args.db_path))[0]
+
+        # Infer HPO directory (assuming structure: .../hpo_dir/optuna_db/study.db)
+        hpo_dir = os.path.dirname(os.path.dirname(args.db_path))
+
+        # Parse the study name to get components
+        optimizer, search_space, dataset, seed, zcp_method = parse_study_name(
+            original_study_name
         )
-    except FileNotFoundError as e:
-        logging.error(e)
+        logging.info(f"Inferred HPO directory: {hpo_dir}")
+        logging.info(f"Inferred study name: {original_study_name}")
+        logging.info(
+            f"Parsed components: optimizer={optimizer}, search_space={search_space}, "
+            f"dataset={dataset}, seed={seed}, zcp_method={zcp_method}"
+        )
+    except (ValueError, IndexError) as e:
+        logging.error(f"Could not parse study details from db_path. Error: {e}")
+        logging.error(
+            "Please ensure the DB file is named like '{optimizer}-{search_space}-{dataset}-{seed}.db' "
+            "and located inside an 'optuna_db' subdirectory of your main HPO output folder."
+        )
         return
 
     # Load the original study
-    storage_name = f"sqlite:///{db_path}"
+    storage_name = f"sqlite:///{args.db_path}"
     try:
         original_study = optuna.load_study(
-            study_name=study_name, storage=storage_name
+            study_name=original_study_name, storage=storage_name
         )
     except Exception as e:
         logging.error(
-            f"Failed to load study '{study_name}' from {db_path}. Error: {e}"
+            f"Failed to load study '{original_study_name}' from {args.db_path}. Error: {e}"
         )
         return
 
     logging.info(
-        f"Loaded original study '{study_name}' with {len(original_study.trials)} trials."
+        f"Loaded original study '{original_study_name}' with {len(original_study.trials)} trials."
     )
 
     # Filter trials based on cumulative runtime
     permitted_trials = []
     cumulative_runtime = 0.0
     # Sort trials by number to process them sequentially
-    sorted_trials = sorted(original_study.get_trials(deepcopy=False), key=lambda t: t.number)
+    sorted_trials = sorted(
+        original_study.get_trials(deepcopy=False), key=lambda t: t.number
+    )
 
     for trial in sorted_trials:
         runtime = get_trial_runtime(
-            results_dir,
-            args.optimizer,
-            args.search_space,
-            args.dataset,
-            args.seed,
+            hpo_dir,
+            optimizer,
+            search_space,
+            dataset,
+            seed,
             trial.number,
-            args.zcp_method,
+            zcp_method,
         )
 
         if trial.state != TrialState.COMPLETE:
@@ -201,8 +183,8 @@ def main():
         )
         return
 
-    # Create a new, filtered database by copying the original
-    filtered_db_path = db_path.replace(".db", "_filtered.db")
+    # Create a new, filtered database
+    filtered_db_path = args.db_path.replace(".db", "_filtered.db")
     if os.path.exists(filtered_db_path):
         logging.warning(
             f"Filtered DB at {filtered_db_path} already exists. It will be overwritten."
@@ -211,7 +193,7 @@ def main():
 
     # Create a new study in a new database file to store only the filtered trials
     filtered_storage = f"sqlite:///{filtered_db_path}"
-    filtered_study_name = f"{study_name}-filtered"
+    filtered_study_name = f"{original_study_name}-filtered"
 
     logging.info(f"Creating new filtered study in: {filtered_db_path}")
 
@@ -230,6 +212,7 @@ def main():
                 value=trial.value,
                 params=trial.params,
                 distributions=trial.distributions,
+                intermediate_values=trial.intermediate_values,
             )
         )
 
@@ -257,7 +240,7 @@ def main():
 
             fig = optuna.visualization.plot_param_importances(filtered_study)
             plot_path = os.path.join(
-                args.hpo_dir, f"{study_name}_filtered_param_importances.html"
+                hpo_dir, f"{original_study_name}_filtered_param_importances.html"
             )
             fig.write_html(plot_path)
             print(f"\nSaved filtered parameter importance plot to: {plot_path}")

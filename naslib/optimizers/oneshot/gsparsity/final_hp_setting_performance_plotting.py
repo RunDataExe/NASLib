@@ -143,24 +143,31 @@ def process_run_data(filepath, acc_metric):
     if is_two_stage:
         stage2_indices = np.where(loss != -1)[0]
 
-        # If there are no entries for stage 2, skip this run
+        # If there are no entries for stage 2, check if it's a fully queried method
         if len(stage2_indices) == 0:
-            return None, None, None
+            # This is a fully queried method if all loss values are -1
+            if len(loss) > 0 and np.all(loss == -1):
+                # For fully queried methods, time is cumulative runtime
+                cumulative_time = np.cumsum(runtime)
+            else:
+                # It's a two-stage method that didn't reach stage 2, so skip.
+                return None, None, None
+        else:
+            # This is a standard two-stage method
+            first_stage2_idx = stage2_indices[0]
+            stage1_runtime = runtime[:first_stage2_idx].sum()
 
-        first_stage2_idx = stage2_indices[0]
-        stage1_runtime = runtime[:first_stage2_idx].sum()
+            # Filter for stage 2 data
+            acc = acc[stage2_indices]
+            runtime = runtime[stage2_indices]
 
-        # Filter for stage 2 data
-        acc = acc[stage2_indices]
-        runtime = runtime[stage2_indices]
-
-        # Prepend the summed stage 1 runtime to the cumulative time of stage 2
-        cumulative_time = np.cumsum(runtime) + stage1_runtime
+            # Prepend the summed stage 1 runtime to the cumulative time of stage 2
+            cumulative_time = np.cumsum(runtime) + stage1_runtime
     else:
         # For single-stage methods, just calculate cumulative time
         cumulative_time = np.cumsum(runtime)
 
-    # If after processing, we have less than 2 points, we can't plot or calculate AUC.
+    # If after processing, we have less than 1 point, we can't plot or calculate AUC.
     if len(acc) < 1:
         return None, None, None
 

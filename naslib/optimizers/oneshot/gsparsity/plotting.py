@@ -266,6 +266,20 @@ def plot_anytime_performance(
         mean_acc = np.mean(interpolated_accs, axis=0)
         std_acc = np.std(interpolated_accs, axis=0)
 
+        # --- AUC Reporting ---
+        mean_auc = np.mean(all_aucs)
+        std_auc = np.std(all_aucs)
+        print(f"  - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
+        for i, run_auc in enumerate(all_aucs):
+            print(f"    - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
+
+        # --- Plotting Mean and Std Dev ---
+        # Construct the label for the legend
+        num_seeds = len(all_trajectories)
+        mean_label = f"{group_label} (Mean of {num_seeds} seeds)"
+        if show_auc_text:
+            mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
+
         # Plot mean and std deviation
         ax.plot(
             time_grid,
@@ -273,7 +287,7 @@ def plot_anytime_performance(
             color=color,
             linestyle=fmt,
             linewidth=2.5,
-            label=f"{group_label} (Mean of {len(all_trajectories)} seeds)",
+            label=mean_label,
         )
         ax.fill_between(
             time_grid,
@@ -289,16 +303,9 @@ def plot_anytime_performance(
                 time_grid, 0, mean_acc, color=color, alpha=0.1, label="Mean AUC Area"
             )
 
-        # --- AUC Reporting ---
-        mean_auc = np.mean(all_aucs)
-        std_auc = np.std(all_aucs)
-        print(f"  - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
-        for i, run_auc in enumerate(all_aucs):
-            print(f"    - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
-
         # --- Final Plot Configuration (for individual plots) ---
         if not combine_plots:
-            ax.legend()
+            ax.legend(loc="upper left")
             ax.set_xlabel("Runtime (seconds)")
             ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()}")
             ax.set_title(
@@ -308,17 +315,17 @@ def plot_anytime_performance(
             ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
             ax.grid(True, which="both", ls="-", alpha=0.5)
 
-            # Add AUC info to plot if requested
-            if show_auc_text:
-                auc_text = f"Mean AUC: {mean_auc:.2f} ± {std_auc:.2f}"
-                plt.figtext(
-                    0.5,
-                    0.01,
-                    auc_text,
-                    ha="center",
-                    fontsize=10,
-                    bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
-                )
+            # Add AUC info to plot if requested - This is now handled by the legend
+            # if show_auc_text:
+            #     auc_text = f"Mean AUC: {mean_auc:.2f} ± {std_auc:.2f}"
+            #     plt.figtext(
+            #         0.5,
+            #         0.01,
+            #         auc_text,
+            #         ha="center",
+            #         fontsize=10,
+            #         bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
+            #     )
 
             filename = f"{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
             save_path = os.path.join(output_dir, filename)
@@ -328,7 +335,7 @@ def plot_anytime_performance(
 
     # --- Final Plot Configuration (for combined plot) ---
     if combine_plots:
-        ax.legend(loc="lower right")
+        ax.legend(loc="upper left")
         ax.set_xlabel("Runtime (seconds)")
         ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()}")
         ax.set_title(plot_title)

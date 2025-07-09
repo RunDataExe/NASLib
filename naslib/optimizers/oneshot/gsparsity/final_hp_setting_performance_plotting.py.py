@@ -376,7 +376,9 @@ def plot_anytime_performance(
             #         bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
             #     )
 
-            filename = f"{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+            filename = (
+                f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+            )
             save_path = os.path.join(output_dir, filename)
             plt.savefig(save_path, bbox_inches="tight")
             plt.close()
@@ -416,7 +418,7 @@ def plot_anytime_performance(
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 
-        filename = f"combined_plot_{acc_metric}.png"
+        filename = f"combined_performance_plot_{acc_metric}.png"
         save_path = os.path.join(output_dir, filename)
         plt.savefig(save_path, bbox_inches="tight")
         plt.close()

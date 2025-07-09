@@ -51,26 +51,48 @@ from sklearn.metrics import auc
 import argparse
 import re
 from collections import defaultdict
+import matplotlib.colors as mcolors
 
 # Default color and style settings for plots
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
+# New color palette provided by the user, converted from [0, 255] to [0, 1] range
 DEFAULTS = [
-    (0.12156862745098039, 0.4666666666666667, 0.7058823529411765),
-    (1.0, 0.4980392156862745, 0.054901960784313725),
-    (0.17254901960784313, 0.6274509803921569, 0.17254901960784313),
-    (0.8392156862745098, 0.15294117647058825, 0.1568627450980392),
-    (0.5803921568627451, 0.403921568627451, 0.7411764705882353),
-    (0.5490196078431373, 0.33725490196078434, 0.29411764705882354),
-    (0.8901960784313725, 0.4666666666666667, 0.7607843137254902),
-    (0.4980392156862745, 0.4980392156862745, 0.4980392156862745),
-    (0.7372549019607844, 0.7411764705882353, 0.13333333333333333),
-    (0.09019607843137255, 0.7450980392156863, 0.8117647058823529),
+    (0.5490196078431373, 0.19215686274509805, 1.0),
+    (0.20392156862745098, 0.8901960784313725, 0.3411764705882353),
+    (0.9764705882352941, 0.0, 0.6313725490196078),
+    (0.1803921568627451, 0.32941176470588235, 0.0),
+    (0.00392156862745098, 0.29411764705882354, 0.6666666666666666),
+    (0.7843137254901961, 0.8, 0.44313725490196076),
+    (1.0, 0.5137254901960784, 0.34509803921568627),
+    (0.00392156862745098, 0.5686274509803921, 0.5254901960784314),
+    (0.5568627450980392, 0.43137254901960786, 0.0),
+    (0.9725490196078431, 0.7254901960784313, 0.5607843137254902),
 ]
 C_MAX = 10
 COLORS = [*DEFAULTS[:C_MAX]] * 3
 FMTS = [*["-"] * C_MAX, *["--"] * C_MAX, *[":"] * C_MAX]
-MARKERS = ["o", "v", "^", "<", ">", "s", "p", "*", "h", "H", "D", "d", "P", "X"]
+# Prioritize the most visually distinct markers for the first few seeds.
+# Circle, Square, Plus, Diamond, and Cross are highly discriminable.
+MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
+
+
+def get_color_shades(base_color, n_shades):
+    """Generates a list of color shades from a base color."""
+    if n_shades <= 1:
+        return [base_color]
+    # Create a color ramp from a slightly lighter version of the base color to the base color
+    # This makes the shades distinct but visually related.
+    lighter_color = mcolors.to_rgba(base_color, alpha=0.4)
+    base_rgba = mcolors.to_rgba(base_color, alpha=0.8)
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        "custom_cmap", [lighter_color, base_rgba]
+    )
+    return (
+        [cmap(i / (n_shades - 1)) for i in range(n_shades)]
+        if n_shades > 1
+        else [base_rgba]
+    )
 
 
 def find_error_files(root_dir):
@@ -180,6 +202,12 @@ def plot_anytime_performance(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # Create a consistent mapping from seed value to marker
+    all_seeds = sorted(list(set(f["seed"] for f in files)))
+    seed_to_marker = {
+        seed: MARKERS[i % len(MARKERS)] for i, seed in enumerate(all_seeds)
+    }
+
     if combine_plots:
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
@@ -223,32 +251,55 @@ def plot_anytime_performance(
                 plt.close()
             continue
 
+        # Generate shades for individual seed runs
+        num_seeds = len(all_trajectories)
+        seed_colors = get_color_shades(color, num_seeds)
+
         # Plot individual runs from the collected valid data
         if not combine_plots:
             # For individual plots, label each seed clearly
             for i, (time, acc) in enumerate(all_trajectories):
                 run_meta = all_valid_runs_meta[i]
+                marker = seed_to_marker.get(run_meta["seed"], "x")
+
+                # Adjust marker size and width based on the marker type
+                current_markersize = 8 if marker == "+" else 5
+                current_markeredgewidth = 2 if marker == "+" else 1  # Make '+' thicker
+
                 ax.plot(
                     time,
                     acc,
-                    color="grey",
-                    alpha=0.7,
+                    color=seed_colors[i],
+                    alpha=0.9,
                     linestyle=":",
-                    marker=MARKERS[i % len(MARKERS)],
-                    markersize=5,
+                    marker=marker,
+                    markersize=current_markersize,  # Use the adjusted size
+                    markeredgewidth=current_markeredgewidth,  # Use the adjusted width
+                    markevery=max(1, len(time) // 10),  # Avoid over-cluttering
                     label=f"Seed {run_meta['seed']}",
                 )
         else:
-            # For combined plot, show seeds faintly with one legend entry
+            # For combined plot, use method-specific colors for seeds, but a single legend entry
             for i, (time, acc) in enumerate(all_trajectories):
+                run_meta = all_valid_runs_meta[i]
+                marker = seed_to_marker.get(run_meta["seed"], "x")
+
+                # Adjust marker size and width for '+'
+                current_markersize = 8 if marker == "+" else 5
+                current_markeredgewidth = 2 if marker == "+" else 1
+
                 ax.plot(
                     time,
                     acc,
-                    color=color,
-                    alpha=0.25,
+                    color=seed_colors[i],  # Use the derived shade for each seed
+                    alpha=0.7,
                     linestyle=":",
-                    linewidth=1.5,
-                    label="Individual Seeds" if i == 0 else None,
+                    linewidth=1.2,
+                    marker=marker,
+                    markersize=current_markersize,
+                    markeredgewidth=current_markeredgewidth,
+                    markevery=max(1, len(time) // 20),
+                    label=None,  # Labeling is handled manually later
                 )
 
         # --- Aggregation and Mean Plot ---
@@ -293,21 +344,19 @@ def plot_anytime_performance(
             time_grid,
             mean_acc - std_acc,
             mean_acc + std_acc,
-            color=color,
+            color=color,  # Keep the std. dev. area colored like the mean line
             alpha=0.2,
-            label=f"{group_label} (Std. Dev.)" if combine_plots else "Std. Dev.",
+            label=None,  # Do not add to legend automatically
         )
 
-        if show_auc_fill and not combine_plots:
-            ax.fill_between(
-                time_grid, 0, mean_acc, color=color, alpha=0.1, label="Mean AUC Area"
-            )
+        if show_auc_fill:
+            ax.fill_between(time_grid, 0, mean_acc, color=color, alpha=0.1, label=None)
 
         # --- Final Plot Configuration (for individual plots) ---
         if not combine_plots:
             ax.legend(loc="upper left")
-            ax.set_xlabel("Runtime (seconds)")
-            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()}")
+            ax.set_xlabel("Runtime (seconds) [log scale]")
+            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
             ax.set_title(
                 f"Anytime Performance: {optimizer}\n{dataset} on {search_space}"
             )
@@ -335,9 +384,33 @@ def plot_anytime_performance(
 
     # --- Final Plot Configuration (for combined plot) ---
     if combine_plots:
-        ax.legend(loc="upper left")
-        ax.set_xlabel("Runtime (seconds)")
-        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()}")
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+
+        # Get existing handles and labels from the plot (these are the mean lines)
+        handles, labels = ax.get_legend_handles_labels()
+
+        # Create a single, representative legend entry for all seeds
+        seed_legend_handle = Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle=":",
+            marker=".",  # Use a generic marker for the legend
+            markersize=8,
+            label="Individual Seeds",
+        )
+
+        # Create a single, representative legend entry for standard deviation
+        std_dev_handle = Patch(facecolor="gray", alpha=0.4, label="Std. Dev.")
+
+        # Prepend the custom handles to the existing ones
+        ax.legend(
+            handles=[seed_legend_handle, std_dev_handle] + handles, loc="upper left"
+        )
+
+        ax.set_xlabel("Runtime (seconds) [log scale]")
+        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
         ax.set_title(plot_title)
         ax.set_xscale("log")
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))

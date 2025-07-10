@@ -292,15 +292,29 @@ def plot_anytime_performance(
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1  # Make '+' thicker
 
-                # Plot the smooth interpolated line
+                # --- Split plot for interpolated vs. real data ---
+                first_real_time = time[1]
+                split_idx = np.searchsorted(time_grid, first_real_time)
+
+                # Plot the "estimated" part (lighter)
                 ax.plot(
-                    time_grid,
-                    interp_acc,
+                    time_grid[: split_idx + 1],
+                    interp_acc[: split_idx + 1],
                     color=seed_colors[i],
-                    alpha=0.9,
+                    alpha=0.2,  # Lighter
                     linestyle=":",
                     label=f"Seed {run_meta['seed']}",
                 )
+                # Plot the "real" part (heavier)
+                ax.plot(
+                    time_grid[split_idx:],
+                    interp_acc[split_idx:],
+                    color=seed_colors[i],
+                    alpha=0.9,  # Heavier
+                    linestyle=":",
+                    label=None,  # No extra legend entry
+                )
+
                 # Overlay the original data points as markers
                 ax.plot(
                     time[1:],  # Exclude the t=0 random guess point
@@ -329,16 +343,31 @@ def plot_anytime_performance(
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1
 
-                # Plot the smooth interpolated line
+                # --- Split plot for interpolated vs. real data ---
+                first_real_time = time[1]
+                split_idx = np.searchsorted(time_grid, first_real_time)
+
+                # Plot the "estimated" part (lighter)
                 ax.plot(
-                    time_grid,
-                    interp_acc,
-                    color=seed_colors[i],  # Use the derived shade for each seed
-                    alpha=0.7,
+                    time_grid[: split_idx + 1],
+                    interp_acc[: split_idx + 1],
+                    color=seed_colors[i],
+                    alpha=0.2,  # Lighter
                     linestyle=":",
                     linewidth=1.2,
-                    label=None,  # Labeling is handled manually later
+                    label=None,
                 )
+                # Plot the "real" part (heavier)
+                ax.plot(
+                    time_grid[split_idx:],
+                    interp_acc[split_idx:],
+                    color=seed_colors[i],
+                    alpha=0.9,  # Heavier
+                    linestyle=":",
+                    linewidth=1.2,
+                    label=None,
+                )
+
                 # Overlay the original data points as markers
                 ax.plot(
                     time[1:],  # Exclude the t=0 random guess point
@@ -386,22 +415,52 @@ def plot_anytime_performance(
         if show_auc_text:
             mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
 
-        # Plot mean and std deviation
+        # --- Split mean plot for interpolated vs. real data ---
+        # Find the average time of the first real data point to split the mean plot
+        first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
+        if first_real_times:
+            avg_first_real_time = np.mean(first_real_times)
+            mean_split_idx = np.searchsorted(time_grid, avg_first_real_time)
+        else:
+            mean_split_idx = 0  # Default to no split if no data
+
+        # Plot the "estimated" part of the mean (lighter)
         ax.plot(
-            time_grid,
-            mean_acc,
+            time_grid[: mean_split_idx + 1],
+            mean_acc[: mean_split_idx + 1],
             color=color,
             linestyle=fmt,
             linewidth=2.5,
-            label=mean_label,
+            alpha=0.5,  # Lighter mean line
+            label=mean_label,  # Label only on the first part
+        )
+        # Plot the "real" part of the mean (heavier)
+        ax.plot(
+            time_grid[mean_split_idx:],
+            mean_acc[mean_split_idx:],
+            color=color,
+            linestyle=fmt,
+            linewidth=2.5,
+            alpha=1.0,  # Heavier mean line
+            label=None,
+        )
+
+        # Split the std. dev. fill to match the mean line's alpha
+        ax.fill_between(
+            time_grid[: mean_split_idx + 1],
+            (mean_acc - std_acc)[: mean_split_idx + 1],
+            (mean_acc + std_acc)[: mean_split_idx + 1],
+            color=color,
+            alpha=0.1,  # Lighter fill
+            label=None,
         )
         ax.fill_between(
-            time_grid,
-            mean_acc - std_acc,
-            mean_acc + std_acc,
-            color=color,  # Keep the std. dev. area colored like the mean line
-            alpha=0.2,
-            label=None,  # Do not add to legend automatically
+            time_grid[mean_split_idx:],
+            (mean_acc - std_acc)[mean_split_idx:],
+            (mean_acc + std_acc)[mean_split_idx:],
+            color=color,
+            alpha=0.2,  # Heavier fill
+            label=None,
         )
 
         if show_auc_fill:

@@ -226,7 +226,7 @@ def plot_anytime_performance(
     if combine_plots:
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
-        if acc_metric.replace("_", " ").title() == "valid_acc":
+        if acc_metric == "valid_acc":
             plot_title = f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
         else:
             plot_title = f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
@@ -507,7 +507,7 @@ def plot_anytime_performance(
 
             ax.set_xlabel("Runtime (seconds) [log scale]")
             ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
-            if acc_metric.replace("_", " ").title() == "valid_acc":
+            if acc_metric == "valid_acc":
                 ax.set_title(
                     f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
                 )

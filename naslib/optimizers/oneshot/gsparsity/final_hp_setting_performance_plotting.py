@@ -223,13 +223,13 @@ def plot_anytime_performance(
     seed_to_marker = {
         seed: MARKERS[i % len(MARKERS)] for i, seed in enumerate(all_seeds)
     }
-
     if combine_plots:
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
-        plot_title = (
-            f"Anytime Performance Comparison\n{acc_metric.replace('_', ' ').title()}"
-        )
+        if acc_metric.replace("_", " ").title() == "valid_acc":
+            plot_title = f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+        else:
+            plot_title = f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
     else:
         ax = None  # Will be created inside the loop
 
@@ -244,7 +244,7 @@ def plot_anytime_performance(
         all_aucs = []
         all_trajectories = []
         all_valid_runs_meta = []  # Store metadata for valid runs
-        group_label = f"{optimizer}_{dataset}"
+        group_label = f"{optimizer}"
         color = COLORS[group_idx % len(COLORS)]
         fmt = FMTS[group_idx % len(FMTS)]
 
@@ -411,7 +411,7 @@ def plot_anytime_performance(
         # --- Plotting Mean and Std Dev ---
         # Construct the label for the legend
         num_seeds = len(all_trajectories)
-        mean_label = f"{group_label} (Mean of {num_seeds} seeds)"
+        mean_label = f"{group_label}"
         if show_auc_text:
             mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
 
@@ -507,9 +507,14 @@ def plot_anytime_performance(
 
             ax.set_xlabel("Runtime (seconds) [log scale]")
             ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
-            ax.set_title(
-                f"Anytime Performance: {optimizer}\n{dataset} on {search_space}"
-            )
+            if acc_metric.replace("_", " ").title() == "valid_acc":
+                ax.set_title(
+                    f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+                )
+            else:
+                ax.set_title(
+                    f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+                )
             ax.set_xscale("log")
             ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
             ax.grid(True, which="both", ls="-", alpha=0.5)

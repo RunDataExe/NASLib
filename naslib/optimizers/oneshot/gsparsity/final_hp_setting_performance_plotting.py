@@ -505,8 +505,8 @@ def plot_anytime_performance(
                 ncol=1,  # vertical
             )
 
-            ax.set_xlabel("Runtime (seconds) [log scale]")
-            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
+            ax.set_xlabel("Runtime (seconds) [Log Scale]")
+            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [Linear Scale]")
             if acc_metric == "valid_acc":
                 ax.set_title(
                     f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
@@ -575,8 +575,8 @@ def plot_anytime_performance(
             ncol=1,  # vertical
         )
 
-        ax.set_xlabel("Runtime (seconds) [log scale]")
-        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
+        ax.set_xlabel("Runtime (seconds) [Log Scale]")
+        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [Linear Scale]")
         ax.set_title(plot_title)
         ax.set_xscale("log")
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))

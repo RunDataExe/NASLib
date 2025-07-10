@@ -303,7 +303,7 @@ def plot_anytime_performance(
                     color=seed_colors[i],
                     alpha=0.2,  # Lighter
                     linestyle=":",
-                    label=f"Seed {run_meta['seed']}",
+                    label=None,  # No legend entry for the line itself
                 )
                 # Plot the "real" part (heavier)
                 ax.plot(
@@ -468,7 +468,43 @@ def plot_anytime_performance(
 
         # --- Final Plot Configuration (for individual plots) ---
         if not combine_plots:
-            ax.legend(loc="upper left")
+            from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
+
+            # Get existing handles and labels (should just be the mean line)
+            handles, labels = ax.get_legend_handles_labels()
+
+            # Create a handle for the standard deviation fill
+            std_dev_handle = Patch(facecolor=color, alpha=0.2, label="Std. Dev.")
+
+            # Create custom legend handles for each seed's marker
+            seed_handles = []
+            seed_labels = []
+            # Sort by seed number for consistent legend order
+            for run_meta in sorted(all_valid_runs_meta, key=lambda x: int(x["seed"])):
+                seed = run_meta["seed"]
+                marker = seed_to_marker.get(seed, "x")
+                # Create a handle for each seed with the method's color
+                seed_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        linestyle="None",
+                        marker=marker,
+                        color=color,
+                        markersize=8,
+                    )
+                )
+                seed_labels.append(f"{seed}")
+
+            # Combine handles and create the legend in the desired order
+            ax.legend(
+                handles=handles + [std_dev_handle] + seed_handles,
+                labels=labels + ["Std. Dev."] + seed_labels,
+                loc="upper left",
+                ncol=1,  # vertical
+            )
+
             ax.set_xlabel("Runtime (seconds) [log scale]")
             ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
             ax.set_title(
@@ -506,23 +542,32 @@ def plot_anytime_performance(
         # Get existing handles and labels from the plot (these are the mean lines)
         handles, labels = ax.get_legend_handles_labels()
 
-        # Create a single, representative legend entry for all seeds
-        seed_legend_handle = Line2D(
-            [0],
-            [0],
-            color="black",
-            linestyle=":",
-            marker=".",  # Use a generic marker for the legend
-            markersize=8,
-            label="Individual Seeds",
-        )
-
         # Create a single, representative legend entry for standard deviation
         std_dev_handle = Patch(facecolor="gray", alpha=0.4, label="Std. Dev.")
 
-        # Prepend the custom handles to the existing ones
+        # Create custom legend handles for each seed's marker, but in gray
+        seed_handles = []
+        seed_labels = []
+        # Use the global seed_to_marker map for a complete legend
+        for seed, marker in sorted(seed_to_marker.items()):
+            seed_handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    linestyle="None",
+                    marker=marker,
+                    color="gray",
+                    markersize=8,
+                )
+            )
+            seed_labels.append(f"{seed}")
+
+        # Combine handles and create the legend in the desired order
         ax.legend(
-            handles=[seed_legend_handle, std_dev_handle] + handles, loc="upper left"
+            handles=handles + [std_dev_handle] + seed_handles,
+            labels=labels + ["Std. Dev."] + seed_labels,
+            loc="upper left",
+            ncol=1,  # vertical
         )
 
         ax.set_xlabel("Runtime (seconds) [log scale]")

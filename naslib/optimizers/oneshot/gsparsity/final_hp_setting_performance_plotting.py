@@ -432,7 +432,7 @@ def plot_anytime_performance(
             linestyle=fmt,
             linewidth=2.5,
             alpha=0.5,  # Lighter mean line
-            label=mean_label,  # Label only on the first part
+            label=None,  # Label moved to the 'real' part
         )
         # Plot the "real" part of the mean (heavier)
         ax.plot(
@@ -442,7 +442,7 @@ def plot_anytime_performance(
             linestyle=fmt,
             linewidth=2.5,
             alpha=1.0,  # Heavier mean line
-            label=None,
+            label=mean_label,
         )
 
         # Split the std. dev. fill to match the mean line's alpha

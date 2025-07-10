@@ -227,9 +227,9 @@ def plot_anytime_performance(
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
         if acc_metric == "valid_acc":
-            plot_title = f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+            plot_title = f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
         else:
-            plot_title = f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+            plot_title = f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
     else:
         ax = None  # Will be created inside the loop
 
@@ -505,18 +505,20 @@ def plot_anytime_performance(
                 ncol=1,  # vertical
             )
 
-            ax.set_xlabel("Runtime (Seconds) [Log Scale]")
+            ax.set_xlabel("Runtime (s) [Log Scale]")
             if acc_metric == "valid_acc":
                 ax.set_title(
-                    f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+                    f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
                 )
-                ax.set_ylabel("Validation Accuracy (Percent) [Linear Scale]")
+                ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
             else:
                 ax.set_title(
-                    f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
+                    f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
                 )
-                ax.set_ylabel("Training Accuracy (Percent) [Linear Scale]")
+                ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
             ax.set_xscale("log")
+            ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+            ax.set_ylim(bottom=0)  # Start y-axis at 0
             ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
             ax.grid(True, which="both", ls="-", alpha=0.5)
 
@@ -576,13 +578,15 @@ def plot_anytime_performance(
             ncol=1,  # vertical
         )
 
-        ax.set_xlabel("Runtime (Seconds) [Log Scale]")
+        ax.set_xlabel("Runtime (s) [Log Scale]")
         if acc_metric == "valid_acc":
-            ax.set_ylabel("Validation Accuracy (Percent) [Linear Scale]")
+            ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
         else:
-            ax.set_ylabel("Training Accuracy (Percent) [Linear Scale]")
+            ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
         ax.set_title(plot_title)
         ax.set_xscale("log")
+        ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+        ax.set_ylim(bottom=0)  # Start y-axis at 0
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 

@@ -53,6 +53,9 @@ import re
 from collections import defaultdict
 import matplotlib.colors as mcolors
 
+# Dataset classes for random guess calculation
+DATASET_CLASSES = {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120}
+
 # Default color and style settings for plots
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
@@ -126,7 +129,7 @@ def find_error_files(root_dir):
     return error_files
 
 
-def process_run_data(filepath, acc_metric):
+def process_run_data(filepath, acc_metric, dataset):
     """Loads and processes a single run from an errors.json file."""
     with open(filepath, "r") as f:
         data = json.load(f)
@@ -171,10 +174,16 @@ def process_run_data(filepath, acc_metric):
     if len(acc) < 1:
         return None, None, None
 
-    # The user wants to see the raw performance, not just the incumbent.
-    # incumbent_acc = np.maximum.accumulate(acc)
+    # Prepend a random guess at time=0
+    num_classes = DATASET_CLASSES.get(dataset, 10)  # Default to 10 if unknown
+    random_guess_acc = 1.0 / num_classes
+    cumulative_time = np.insert(cumulative_time, 0, 0)
+    acc = np.insert(acc, 0, random_guess_acc)
 
-    # Calculate AUC on the raw accuracy, handle cases with a single point.
+    # Use incumbent (best-so-far) performance
+    acc = np.maximum.accumulate(acc)
+
+    # Calculate AUC on the incumbent accuracy, handle cases with a single point.
     run_auc = auc(cumulative_time, acc) if len(cumulative_time) >= 2 else 0.0
 
     return cumulative_time, acc, run_auc
@@ -243,7 +252,7 @@ def plot_anytime_performance(
 
         # Process runs and collect valid data first
         for run_meta in runs:
-            time, acc, run_auc = process_run_data(run_meta["path"], acc_metric)
+            time, acc, run_auc = process_run_data(run_meta["path"], acc_metric, dataset)
             if time is None:
                 print(f"  - Skipping seed {run_meta['seed']} (no data).")
                 continue
@@ -262,6 +271,10 @@ def plot_anytime_performance(
         num_seeds = len(all_trajectories)
         seed_colors = get_color_shades(color, num_seeds)
 
+        # Create a common time grid for interpolation for all lines (mean and seeds)
+        max_time = max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
+        time_grid = np.linspace(0, max_time, 500)
+
         # Plot individual runs from the collected valid data
         if not combine_plots:
             # For individual plots, label each seed clearly
@@ -269,21 +282,36 @@ def plot_anytime_performance(
                 run_meta = all_valid_runs_meta[i]
                 marker = seed_to_marker.get(run_meta["seed"], "x")
 
+                # Interpolate seed data for a smooth curve
+                unique_indices = np.unique(time, return_index=True)[1]
+                interp_acc = np.interp(
+                    time_grid, time[unique_indices], acc[unique_indices]
+                )
+
                 # Adjust marker size and width based on the marker type
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1  # Make '+' thicker
 
+                # Plot the smooth interpolated line
                 ax.plot(
-                    time,
-                    acc,
+                    time_grid,
+                    interp_acc,
                     color=seed_colors[i],
                     alpha=0.9,
                     linestyle=":",
-                    marker=marker,
-                    markersize=current_markersize,  # Use the adjusted size
-                    markeredgewidth=current_markeredgewidth,  # Use the adjusted width
-                    markevery=max(1, len(time) // 10),  # Avoid over-cluttering
                     label=f"Seed {run_meta['seed']}",
+                )
+                # Overlay the original data points as markers
+                ax.plot(
+                    time[1:],  # Exclude the t=0 random guess point
+                    acc[1:],
+                    linestyle="None",  # No line connecting markers
+                    marker=marker,
+                    color=seed_colors[i],
+                    markersize=current_markersize,
+                    markeredgewidth=current_markeredgewidth,
+                    alpha=0.9,
+                    label=None,  # No extra legend entry
                 )
         else:
             # For combined plot, use method-specific colors for seeds, but a single legend entry
@@ -291,27 +319,47 @@ def plot_anytime_performance(
                 run_meta = all_valid_runs_meta[i]
                 marker = seed_to_marker.get(run_meta["seed"], "x")
 
+                # Interpolate seed data for a smooth curve
+                unique_indices = np.unique(time, return_index=True)[1]
+                interp_acc = np.interp(
+                    time_grid, time[unique_indices], acc[unique_indices]
+                )
+
                 # Adjust marker size and width for '+'
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1
 
+                # Plot the smooth interpolated line
                 ax.plot(
-                    time,
-                    acc,
+                    time_grid,
+                    interp_acc,
                     color=seed_colors[i],  # Use the derived shade for each seed
                     alpha=0.7,
                     linestyle=":",
                     linewidth=1.2,
+                    label=None,  # Labeling is handled manually later
+                )
+                # Overlay the original data points as markers
+                ax.plot(
+                    time[1:],  # Exclude the t=0 random guess point
+                    acc[1:],
+                    linestyle="None",
                     marker=marker,
+                    color=seed_colors[i],
                     markersize=current_markersize,
                     markeredgewidth=current_markeredgewidth,
-                    markevery=max(1, len(time) // 20),
-                    label=None,  # Labeling is handled manually later
+                    alpha=0.7,
+                    label=None,
                 )
 
         # --- Aggregation and Mean Plot ---
         # Create a common time grid for interpolation
-        max_time = max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
+        if (
+            not all_trajectories
+        ):  # Recalculate max_time if needed, though it should exist
+            max_time = 0
+        else:
+            max_time = max(t[-1] for t, a in all_trajectories)
         time_grid = np.linspace(0, max_time, 500)
 
         interpolated_accs = []

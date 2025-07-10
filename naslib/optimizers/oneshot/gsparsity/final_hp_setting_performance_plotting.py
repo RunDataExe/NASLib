@@ -505,16 +505,17 @@ def plot_anytime_performance(
                 ncol=1,  # vertical
             )
 
-            ax.set_xlabel("Runtime (seconds) [Log Scale]")
-            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [Linear Scale]")
+            ax.set_xlabel("Runtime (Seconds) [Log Scale]")
             if acc_metric == "valid_acc":
                 ax.set_title(
                     f"Incumbent Anytime Validation Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
                 )
+                ax.set_ylabel("Validation Accuracy (Percent) [Linear Scale]")
             else:
                 ax.set_title(
                     f"Incumbent Anytime Training Accuracy | {f['dataset'].upper()} | NAS-Bench-201"
                 )
+                ax.set_ylabel("Training Accuracy (Percent) [Linear Scale]")
             ax.set_xscale("log")
             ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
             ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -575,8 +576,11 @@ def plot_anytime_performance(
             ncol=1,  # vertical
         )
 
-        ax.set_xlabel("Runtime (seconds) [Log Scale]")
-        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [Linear Scale]")
+        ax.set_xlabel("Runtime (Seconds) [Log Scale]")
+        if acc_metric == "valid_acc":
+            ax.set_ylabel("Validation Accuracy (Percent) [Linear Scale]")
+        else:
+            ax.set_ylabel("Training Accuracy (Percent) [Linear Scale]")
         ax.set_title(plot_title)
         ax.set_xscale("log")
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))

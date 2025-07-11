@@ -40,25 +40,42 @@ import torch
 # TODO Filter db to remove trials that would have not been permitted by the budget and create a new study with the filtered trials that I will use for importance checking and visualization
 # TODO check if log.log for selftraining_inverted and inverted gives the same
 # TODO enable that new trials can be added to a study if the same setting is reran (check if runtime would exceed / is exeeded, before you allow (trials naslib))
+# TODO optuna visualization
+# TODO verify time for self_training_inverted_bananas_ methods in logs/errors.json
+# TODO make decision about zcp size transformation (currently focus on middle of image despite random)
 # * OPEN
 #! Today:
+# TODO make decision about Early Stopping prob will go for validation loss as it is continous and encapsulates how much the model is off the target
+# TODO decide where everywhere to use early stopping (also in selflearning inverted bananas?)
+#! TODO run non zcp based HPO as quickly as possible (joint hpo and nas paper how to calculate hb budget??)
 
-# TODO verify time for self_training_inverted_bananas_ methods in logs/errors.json
+
+# TODO make decision about ZCP normalization
+# TODO make decision about Dimensionality of Synthetic network
+#! TODO start zcp hpo as fast as possible
+
+# Later if hpo runs are running / working
+# TODO order seeds such that they are in one row instead of vertically ordered
+# TODO performance incumbent acc, stability raw acc
+# TODO cumulative AUC ylabel = Cumulative Incumbent Accuracy (%·s) [Linear Scale]; Cumulative Raw Accuracy (%·s) [Linear Scale]
+# TODO performance stability AUC ylabel = Incumbent Accuracy (%) [Linear Scale]; Raw Accuracy (%) [Linear Scale]
+# TODO titels Anytime Performance DATASET BENCHMARK; Anytime Stability DATASET BENCHMARK; Cumulative Performance DATASET BENCHMARK; Cumulative Stability DATASET BENCHMARK (that final hp and how auc is made and seed num etc in footnote in the paper itself)
+# TODO make Final Performance Plot / AUC / cumulative AUC
+# TODO make Final Stability Plot / AUC / cumulative AUC
+# TODO validate the auc calculation
+# TODO maybe only if I realy have time make generalization plots across all datasets per method
+
+# TODO script that takes the best hp per method / dataset combination and creates slurm scripts for each run
+
+
 # TODO check epochs that the methods run in WHPO
 # TODO check hpo such that the studies are not pruned for wide search space or that the importance analysis is using pruned and completed for this part of the study
-# TODO optuna visualization
+
 # TODO save into lazygit and proceed with other tasks
-# TODO make HPO Plot / AUC HPO
 # TODO make Final Training Plot / AUC / cumulative AUC
 # TODO make first test plots to show in presentation
 # TODO make presentation slides
 
-# TODO make decision about ZCP normalization
-# TODO make decision about Dimensionality of Synthetic net
-# TODO make decision about zcp size transformation (currently focus on middle of image despite random)
-
-
-# TODO script that takes the best hp per method / dataset combination and creates slurm scripts for each run
 
 # TODO implement early stopping for the methods such that they are trained till convergence not till fixed point
 
@@ -847,11 +864,11 @@ def update_config(
     params_str = f"trial_{trial.number}"
 
     if "inverted_bananas_zcp_gsparsity" in optimizer_type:
-        config.save = f"{out_dir}/{optimizer_type}/{config.stage2.search.zcp_method}/{search_space_type}/{dataset}/{seed}/{params_str}"
+        config.save = f"{out_dir}/WHPO/{optimizer_type}/{config.stage2.search.zcp_method}/{search_space_type}/{dataset}/{seed}/{params_str}"
     elif "zcp_gsparsity" in optimizer_type:
-        config.save = f"{out_dir}/{optimizer_type}/{config.search.zcp_method}/{search_space_type}/{dataset}/{seed}/{params_str}"
+        config.save = f"{out_dir}/WHPO/{optimizer_type}/{config.search.zcp_method}/{search_space_type}/{dataset}/{seed}/{params_str}"
     else:
-        config.save = f"{out_dir}/{optimizer_type}/{search_space_type}/{dataset}/{seed}/{params_str}"
+        config.save = f"{out_dir}/WHPO/{optimizer_type}/{search_space_type}/{dataset}/{seed}/{params_str}"
 
     # Set seed
     config.search.seed = seed
@@ -1113,7 +1130,7 @@ def main():
     # Define storage path for the Optuna study database
     # This creates a unique database for each optimizer/dataset combination
     # inside the main output directory.
-    db_dir = os.path.join(out_dir, "optuna_db")
+    db_dir = os.path.join(out_dir, "WHPO_Databases")
     os.makedirs(db_dir, exist_ok=True)
 
     # Construct a unique study name and database file path

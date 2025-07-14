@@ -268,7 +268,7 @@ optimizer_configs = {
             "threshold": 0.000001,
             "normalization": "div",  # in paper div
             "normalization_exponent": 0.5,  # in paper 0.5
-            "learning_rate": 0.001,  # original 0.01 in paper 0.001
+            "learning_rate": 0.0001,  # original 0.01 in paper 0.001 #!!!!!!!!!!!!!!!!!!
             "momentum": 0.8,  # in paper 0.8
             "learning_rate_min": 0.0001,  # in paper 0.0001
             "batch_size": 64,  # original 128; in log 64
@@ -327,7 +327,7 @@ optimizer_configs = {
         "stage1": {
             "search": {
                 # "epochs": search_epochs // 3,  #!
-                "epochs": 5,
+                "epochs": 3,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -346,13 +346,13 @@ optimizer_configs = {
         "stage2": {
             "search": {
                 # "epochs": search_epochs * 2 // 3,  #!
-                "epochs": 2,
+                "epochs": 5,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
                 "normalization": "div",  # ["none", "mul", "div"]
                 "normalization_exponent": 0.5,
-                "learning_rate": 0.001,
+                "learning_rate": 0.0001,  # original 0.01 in paper 0.001 #!!!!!!!!!!!!!!!!!!
                 "momentum": 0.8,
                 "learning_rate_min": 0.0001,
             },
@@ -372,7 +372,7 @@ optimizer_configs = {
         "stage1": {
             "search": {
                 # "epochs": search_epochs // 3, #!
-                "epochs": 5,
+                "epochs": 3,
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -391,7 +391,7 @@ optimizer_configs = {
         "stage2": {
             "search": {
                 # "epochs": search_epochs // 3, #!
-                "epochs": 2,
+                "epochs": 3,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -437,8 +437,8 @@ optimizer_configs = {
             "num_arches_to_mutate": 1,
             "max_mutations": 1,
             "num_candidates": 100,
-            "train_epochs": 2,  #!
-            "use_real_time": False,
+            "train_epochs": 200,  #!
+            "use_real_time": True,
         },
     },
     "self_training_inverted_bananas_gsparsity": {
@@ -450,7 +450,7 @@ optimizer_configs = {
             "cutout": False,
             "cutout_length": 16,
             # "use_real_time": True, #!
-            "use_real_time": True,
+            "use_real_time": False,
         },
         # Stage 1 configuration (Self-Training Inverted BANANAS)
         "stage1": {
@@ -473,7 +473,7 @@ optimizer_configs = {
         # Stage 2 configuration (GSparsity)
         "stage2": {
             "search": {
-                "epochs": 2,
+                "epochs": 3,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -516,7 +516,7 @@ optimizer_configs = {
         # Stage 2 configuration (ZCP GSparsity)
         "stage2": {
             "search": {
-                "epochs": 2,
+                "epochs": 3,
                 "grad_clip": 0,
                 "weight_decay": 60,
                 "threshold": 0.000001,
@@ -535,6 +535,13 @@ optimizer_configs = {
 # Add common evaluation to all optimizer configs
 for opt in optimizer_configs:
     optimizer_configs[opt]["evaluation"] = evaluation
+
+for opt in optimizer_configs:
+    optimizer_configs[opt]["search"]["early_stopping"] = {
+        "criterion": "valid_loss",  # Can be 'train_acc', 'train_loss', 'valid_acc', 'valid_loss', or 'runtime'
+        "patience": 7,  # Number of epochs to wait for improvement
+        "threshold": 0.0001,  # Minimum change to be considered an improvement
+    }
 
 
 def update_config(config, optimizer_type, search_space_type, dataset, seed, out_dir):

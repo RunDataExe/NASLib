@@ -45,7 +45,7 @@ import torch
 # TODO make decision about zcp size transformation (currently focus on middle of image despite random)
 # * OPEN
 #! Today:
-# TODO make decision about Early Stopping prob will go for validation loss as it is continous and encapsulates how much the model is off the target
+# TODO make decision about Early Stopping prob will go for validation loss as it is continous and encapsulates how much the model is off the target (could also run very long and choose the best based on checkpoints afterwards but how will i treat self training ibo? I normaly would have to tune patience and threshold but with DEHB I already have some sort of early stopping thus tuning it is probably not really informative)
 # TODO decide where everywhere to use early stopping (also in selflearning inverted bananas?)
 #! TODO run non zcp based HPO as quickly as possible (joint hpo and nas paper how to calculate hb budget??)
 
@@ -63,9 +63,10 @@ import torch
 # TODO make Final Performance Plot / AUC / cumulative AUC
 # TODO make Final Stability Plot / AUC / cumulative AUC
 # TODO validate the auc calculation
+# TODO implement normalized AUC to make comparison easier
 # TODO maybe only if I realy have time make generalization plots across all datasets per method
 
-# TODO script that takes the best hp per method / dataset combination and creates slurm scripts for each run
+# TODO script that takes the best hp per method / dataset combination and creates slurm scripts for each run e.g. arg configs for each method
 
 
 # TODO check epochs that the methods run in WHPO
@@ -694,6 +695,12 @@ def objective(trial: optuna.trial.Trial) -> float:
 
     # Add common evaluation config
     config["evaluation"] = evaluation
+
+    config["search"]["early_stopping"] = {
+        "criterion": "valid_loss",  # Can be 'train_acc', 'train_loss', 'valid_acc', 'valid_loss', or 'runtime'
+        "patience": 7,  # Number of epochs to wait for improvement
+        "threshold": 0.0001,  # Minimum change to be considered an improvement
+    }
 
     # Convert dictionary to CfgNode
     config = CfgNode.load_cfg(json.dumps(config))

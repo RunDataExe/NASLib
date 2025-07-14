@@ -47,6 +47,32 @@ class Trainer(object):
         self.epochs = self.config.search.epochs
         self.lightweight_output = lightweight_output
 
+        # Early stopping
+        self.early_stopping_enabled = False
+        self.stop_training = False  # Flag to signal immediate stop
+        if "early_stopping" in self.config.search:
+            self.early_stopping_enabled = True
+            es_config = self.config.search.early_stopping
+            self.early_stopping_criterion = es_config.criterion
+            self.early_stopping_patience = es_config.patience
+            self.early_stopping_threshold = float(es_config.threshold)
+
+            # Determine mode automatically based on criterion
+            if "loss" in self.early_stopping_criterion:
+                self.early_stopping_mode = "min"
+            else:  # for acc, runtime
+                self.early_stopping_mode = "max"
+
+            self.early_stopping_counter = 0
+            self.early_stopping_best_value = (
+                float("inf") if self.early_stopping_mode == "min" else float("-inf")
+            )
+            logger.info(
+                f"Early stopping enabled: criterion={self.early_stopping_criterion}, "
+                f"patience={self.early_stopping_patience}, threshold={self.early_stopping_threshold}, "
+                f"mode={self.early_stopping_mode}"
+            )
+
         # preparations
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -158,6 +184,9 @@ class Trainer(object):
                                 self.search_trajectory[key] = previous_trajectory_data[
                                     key
                                 ][:start_epoch]
+                                # self.search_trajectory[key] = previous_trajectory_data[
+                                #     key
+                                # ]
                                 logger.info(
                                     f"Resuming: Loaded {len(self.search_trajectory[key])} entries for trajectory key '{key}' from errors.json (expected up to {start_epoch})."
                                 )
@@ -165,6 +194,10 @@ class Trainer(object):
                         logger.info(
                             f"Successfully processed previous search_trajectory from errors.json for resuming at epoch {start_epoch}."
                         )
+
+                        # Re-initialize early stopping state from loaded trajectory
+                        if self.early_stopping_enabled:
+                            self._reinitialize_early_stopping_from_history()
 
                 except Exception as e:
                     logger.error(
@@ -189,6 +222,13 @@ class Trainer(object):
 
         arch_weights = []
         for e in range(start_epoch, self.epochs):
+            # Check if early stopping was triggered during re-initialization
+            if self.stop_training:
+                logger.info(
+                    f"Stopping search at epoch {e} because historical data already met the early stopping criteria."
+                )
+                break
+
             start_time = time.time()
             self.optimizer.new_epoch(e)
 
@@ -341,6 +381,14 @@ class Trainer(object):
             # )
 
             self._log_to_json()
+
+            # Early stopping check
+            if self.early_stopping_enabled:
+                if self._check_early_stopping():
+                    logger.info(
+                        f"Stopping early at epoch {e} due to no improvement for {self.early_stopping_patience} epochs."
+                    )
+                    break
 
             # Report to Optuna and check for pruning
             if trial:
@@ -756,6 +804,85 @@ class Trainer(object):
             if checkpointer.has_checkpoint():
                 return checkpoint.get("iteration", -1) + 1
         return 0
+
+    def _reinitialize_early_stopping_from_history(self):
+        """
+        Recalculates early stopping state (best_value, counter) from the loaded
+        search trajectory. This is crucial for correct behavior when resuming.
+        """
+        logger.info("Re-initializing early stopping state from historical data.")
+        trajectory = self.search_trajectory.get(self.early_stopping_criterion, [])
+        if not trajectory:
+            logger.warning(
+                "Early stopping history re-initialization: Trajectory is empty. Nothing to do."
+            )
+            return
+
+        # Reset to initial state before recalculating
+        self.early_stopping_counter = 0
+        self.early_stopping_best_value = (
+            float("inf") if self.early_stopping_mode == "min" else float("-inf")
+        )
+
+        for value in trajectory:
+            # Ignore placeholder values that might come from some query-based methods
+            if value in [-1, None]:
+                continue
+
+            if self.early_stopping_mode == "min":
+                improvement = self.early_stopping_best_value - value
+            else:  # max
+                improvement = value - self.early_stopping_best_value
+
+            if improvement > self.early_stopping_threshold:
+                self.early_stopping_best_value = value
+                self.early_stopping_counter = 0
+            else:
+                self.early_stopping_counter += 1
+
+        logger.info(
+            f"Early stopping state re-initialized: Best value = {self.early_stopping_best_value}, "
+            f"Patience counter = {self.early_stopping_counter}"
+        )
+
+        # Check if we should stop immediately based on the loaded history
+        if self.early_stopping_counter >= self.early_stopping_patience:
+            logger.warning(
+                f"Historical data meets early stopping criteria (Patience: {self.early_stopping_patience}). "
+                "Training will be stopped before the next epoch."
+            )
+            self.stop_training = True
+
+    def _check_early_stopping(self):
+        """Checks if the early stopping condition is met."""
+        try:
+            current_value = self.search_trajectory[self.early_stopping_criterion][-1]
+        except (KeyError, IndexError):
+            logger.warning(
+                f"Early stopping criterion '{self.early_stopping_criterion}' not found in search_trajectory. Skipping check."
+            )
+            return
+
+        if self.early_stopping_mode == "min":
+            improvement = self.early_stopping_best_value - current_value
+        else:  # max
+            improvement = current_value - self.early_stopping_best_value
+
+        if improvement > self.early_stopping_threshold:
+            self.early_stopping_best_value = current_value
+            self.early_stopping_counter = 0
+            logger.info(
+                f"Early stopping: New best value for {self.early_stopping_criterion}: {current_value:.6f}"
+            )
+        else:
+            self.early_stopping_counter += 1
+            logger.info(
+                f"Early stopping: No improvement for {self.early_stopping_counter} epochs. "
+                f"Best {self.early_stopping_criterion}: {self.early_stopping_best_value:.6f}, "
+                f"Current: {current_value:.6f}"
+            )
+
+        return self.early_stopping_counter >= self.early_stopping_patience
 
     def _log_to_json(self):
         """log training statistics to json file"""

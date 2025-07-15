@@ -121,6 +121,7 @@ class Bananas(MetaOptimizer):
         self.train_data = []
         self.next_batch = []
         self.history = torch.nn.ModuleList()
+        self.internal_early_stopping_events = []  # This will now store one value per epoch
 
         self.zc = config.search.zc if hasattr(config.search, "zc") else None
         self.semi = "semi" in self.predictor_type
@@ -318,6 +319,7 @@ class Bananas(MetaOptimizer):
         total_train_time = 0
         final_train_acc = 0
         best_val_acc = 0
+        stopped_at_epoch = -1  # Default value if no early stopping
 
         # --- Internal Early Stopping Initialization ---
         if self.early_stopping_enabled:
@@ -398,6 +400,7 @@ class Bananas(MetaOptimizer):
                     logger.info(
                         f"Stopping internal training early at epoch {epoch + 1} due to no improvement."
                     )
+                    stopped_at_epoch = epoch + 1  # Record the internal epoch number
                     break
             # ------------------------------------
 
@@ -413,7 +416,13 @@ class Bananas(MetaOptimizer):
                 prec1, _ = utils.accuracy(logits_test, target_test, topk=(1, 5))
                 test_acc_meter.update(prec1.item(), input_test.size(0))
 
-        return final_train_acc, best_val_acc, test_acc_meter.avg, total_train_time
+        return (
+            final_train_acc,
+            best_val_acc,
+            test_acc_meter.avg,
+            total_train_time,
+            stopped_at_epoch,
+        )
 
     def get_zero_cost_predictors(self):
         return {zc_name: ZeroCost(method_type=zc_name) for zc_name in self.zc_names}
@@ -440,9 +449,13 @@ class Bananas(MetaOptimizer):
 
     def _set_scores(self, model):
         logger.info(f"Starting real training for arch {model.arch_hash[:8]}...")
-        train_acc, val_acc, test_acc, train_time = self._train_and_evaluate_arch(
-            model.arch
-        )
+        (
+            train_acc,
+            val_acc,
+            test_acc,
+            train_time,
+            stopped_at_epoch,
+        ) = self._train_and_evaluate_arch(model.arch)
         logger.info(
             f"Finished real training. Val acc: {val_acc:.4f}, Time: {train_time:.2f}s"
         )
@@ -452,6 +465,9 @@ class Bananas(MetaOptimizer):
         model.train_acc = train_acc
         model.test_acc = test_acc
         model.train_time = train_time
+
+        if stopped_at_epoch != -1:
+            self.internal_early_stopping_events[self.current_epoch] = stopped_at_epoch
 
         if self.zc and len(self.train_data) <= self.max_zerocost:
             model.zc_scores = self.query_zc_scores(model.arch)
@@ -531,6 +547,9 @@ class Bananas(MetaOptimizer):
         return candidates
 
     def new_epoch(self, epoch):
+        self.current_epoch = epoch  # Store current epoch
+        self.internal_early_stopping_events.append(-1)  # Default: no stop
+
         if epoch < self.num_init:
             model = self._sample_new_model()
             self._set_scores(model)

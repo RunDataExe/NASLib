@@ -141,6 +141,27 @@ class Bananas(MetaOptimizer):
             else False
         )
 
+        # Internal early stopping setup
+        self.early_stopping_enabled = False
+        if hasattr(config.search, "early_stopping"):
+            self.early_stopping_enabled = True
+            es_config = config.search.early_stopping
+            self.early_stopping_criterion = es_config.criterion
+            self.early_stopping_patience = es_config.patience
+            self.early_stopping_threshold = float(es_config.threshold)
+
+            # Determine mode automatically based on criterion
+            if "loss" in self.early_stopping_criterion:
+                self.early_stopping_mode = "min"
+            else:  # for acc, runtime
+                self.early_stopping_mode = "max"
+
+            logger.info(
+                f"Internal early stopping enabled for Bananas: criterion={self.early_stopping_criterion}, "
+                f"patience={self.early_stopping_patience}, threshold={self.early_stopping_threshold}, "
+                f"mode={self.early_stopping_mode}"
+            )
+
     def adapt_search_space(self, search_space, scope=None, dataset_api=None):
         # This optimizer now handles its own training, so the search space does not need to be queryable.
         # assert search_space.QUERYABLE, (
@@ -240,6 +261,37 @@ class Bananas(MetaOptimizer):
         if self.semi:
             self.unlabeled = []
 
+    def _check_internal_early_stopping(self, current_values, counter, best_value):
+        """Checks if the internal early stopping condition is met."""
+        try:
+            current_value = current_values[self.early_stopping_criterion]
+        except KeyError:
+            logger.warning(
+                f"Internal early stopping criterion '{self.early_stopping_criterion}' not found in current metrics. Skipping check."
+            )
+            return False, counter, best_value
+
+        if self.early_stopping_mode == "min":
+            improvement = best_value - current_value
+        else:  # max
+            improvement = current_value - best_value
+
+        if improvement > self.early_stopping_threshold:
+            best_value = current_value
+            counter = 0
+            logger.info(
+                f"Internal ES: New best value for {self.early_stopping_criterion}: {current_value:.6f}"
+            )
+        else:
+            counter += 1
+            logger.info(
+                f"Internal ES: No improvement for {counter} epochs. "
+                f"Best {self.early_stopping_criterion}: {best_value:.6f}, "
+                f"Current: {current_value:.6f}"
+            )
+
+        return counter >= self.early_stopping_patience, counter, best_value
+
     def _train_and_evaluate_arch(self, arch):
         """
         Trains a single architecture from scratch using the NAS-Bench-201 training regime.
@@ -267,10 +319,19 @@ class Bananas(MetaOptimizer):
         final_train_acc = 0
         best_val_acc = 0
 
+        # --- Internal Early Stopping Initialization ---
+        if self.early_stopping_enabled:
+            early_stopping_counter = 0
+            early_stopping_best_value = (
+                float("inf") if self.early_stopping_mode == "min" else float("-inf")
+            )
+        # -----------------------------------------
+
         for epoch in range(self.train_epochs):
             epoch_start_time = time.time()
             arch.train()
             train_acc_meter = utils.AverageMeter()
+            train_loss_meter = utils.AverageMeter()
 
             for input_train, target_train in self.train_queue:
                 input_train, target_train = (
@@ -288,11 +349,13 @@ class Bananas(MetaOptimizer):
                 optimizer.step()
                 prec1, _ = utils.accuracy(logits_train, target_train, topk=(1, 5))
                 train_acc_meter.update(prec1.item(), input_train.size(0))
+                train_loss_meter.update(loss.item(), input_train.size(0))
 
             final_train_acc = train_acc_meter.avg
 
             arch.eval()
             val_acc_meter = utils.AverageMeter()
+            val_loss_meter = utils.AverageMeter()
             with torch.no_grad():
                 for input_val, target_val in self.valid_queue:
                     input_val, target_val = (
@@ -300,17 +363,43 @@ class Bananas(MetaOptimizer):
                         target_val.to(self.device, non_blocking=True),
                     )
                     logits_val = arch(input_val)
+                    val_loss = criterion(logits_val, target_val)
                     prec1, _ = utils.accuracy(logits_val, target_val, topk=(1, 5))
                     val_acc_meter.update(prec1.item(), input_val.size(0))
+                    val_loss_meter.update(val_loss.item(), input_val.size(0))
 
             if val_acc_meter.avg > best_val_acc:
                 best_val_acc = val_acc_meter.avg
 
             scheduler.step()
-            total_train_time += time.time() - epoch_start_time
+            epoch_runtime = time.time() - epoch_start_time
+            total_train_time += epoch_runtime
             logger.info(
                 f"BANANAS internal training: Arch {arch.get_hash()[:6]} | Epoch {epoch + 1}/{self.train_epochs} | TrainAcc: {train_acc_meter.avg:.4f} | ValAcc: {val_acc_meter.avg:.4f}"
             )
+
+            # --- Internal Early Stopping Check ---
+            if self.early_stopping_enabled:
+                current_metrics = {
+                    "train_acc": train_acc_meter.avg,
+                    "train_loss": train_loss_meter.avg,
+                    "valid_acc": val_acc_meter.avg,
+                    "valid_loss": val_loss_meter.avg,
+                    "runtime": epoch_runtime,
+                }
+                stop, early_stopping_counter, early_stopping_best_value = (
+                    self._check_internal_early_stopping(
+                        current_metrics,
+                        early_stopping_counter,
+                        early_stopping_best_value,
+                    )
+                )
+                if stop:
+                    logger.info(
+                        f"Stopping internal training early at epoch {epoch + 1} due to no improvement."
+                    )
+                    break
+            # ------------------------------------
 
         arch.eval()
         test_acc_meter = utils.AverageMeter()

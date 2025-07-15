@@ -39,6 +39,8 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
 
         # Stage 1: Inverted BANANAS configuration
         self.stage1_config = deepcopy(config.stage1)
+        if "early_stopping" in config["search"]:
+            self.stage1_config.search.early_stopping = config.search.early_stopping
         self.stage1_config.dataset = config.dataset
         self.stage1_config.data = config.data
         self.stage1_config.search.seed = config.search.seed

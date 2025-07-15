@@ -341,26 +341,26 @@ class Trainer(object):
 
                 is_real_time = getattr(self.config.search, "use_real_time", False)
 
-                if is_self_training and is_real_time:
-                    # Case 3: Real-time Self-Training. Use the measured time directly.
-                    # The configurator sets comp_factor and scaling_epochs to 1.
+                if is_self_training:
+                    # For self-training, `train_time` is always the measured wall-clock time.
+                    # The `comp_factor` determines if this time is scaled.
+                    # - If use_real_time=True, configurator sets comp_factor=1.0 -> unscaled real time.
+                    # - If use_real_time=False, configurator loads the actual comp_factor -> scaled real time.
                     scaled_runtime = train_time * comp_factor
-                    logging.info(
-                        f"Real-time self-training runtime: train_time:{train_time} * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                    is_real_time_str = (
+                        "unscaled real-time"
+                        if comp_factor == 1.0
+                        else "scaled real-time"
                     )
-                elif is_self_training and not is_real_time:
-                    # Case 2: Query-based Self-Training. Scale the 200-epoch time by train_epochs/200.
-                    # The configurator sets scaling_epochs to train_epochs.
-                    scaled_runtime = train_time * comp_factor
                     logging.info(
-                        f"Query-based self-training runtime: train_time:{train_time} * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                        f"Self-training runtime ({is_real_time_str}): "
+                        f"measured_time:{train_time:.4f} * comp_factor:{comp_factor:.4f} = scaled_runtime:{scaled_runtime:.4f}"
                     )
                 else:
-                    # Case 1: Standard Query-based method. train_time is the total time for 200 epochs.
-                    # We only apply the computational factor.
+                    # Standard Query-based method. `train_time` is the queried time from the benchmark.
                     scaled_runtime = train_time * scaling_epochs * comp_factor
                     logging.info(
-                        f"Standard query-based runtime: train_time:{train_time} * scaling_epochs:{scaling_epochs} [if 200 -> nasbench201] * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
+                        f"Standard query-based runtime: train_time:{train_time} * scaling_epochs:{scaling_epochs} * comp_factor:{comp_factor} = scaled_runtime:{scaled_runtime}"
                     )
 
                 self.search_trajectory.runtime.append(scaled_runtime)

@@ -102,6 +102,7 @@ class Trainer(object):
                 "train_time": [],
                 "arch_eval": [],
                 "params": 0.0,  # Will be updated
+                "internal_early_stopping_events": [],  # For Bananas-like optimizers
             }
         )
         self.previous_optimizer_stage = -1  # For detecting stage transitions
@@ -1155,6 +1156,28 @@ class Trainer(object):
 
     def _log_to_json(self):
         """log training statistics to json file"""
+        # Check for internal early stopping events on the optimizer or its sub-optimizers
+        events_to_log = None
+        if hasattr(self.optimizer, "internal_early_stopping_events"):
+            events_to_log = self.optimizer.internal_early_stopping_events
+        elif hasattr(self.optimizer, "stage1_optimizer"):
+            # Direct check on stage1_optimizer
+            if hasattr(
+                self.optimizer.stage1_optimizer, "internal_early_stopping_events"
+            ):
+                events_to_log = (
+                    self.optimizer.stage1_optimizer.internal_early_stopping_events
+                )
+            # Check for wrapped bananas inside stage1_optimizer (e.g., Inverted_Bananas)
+            elif hasattr(self.optimizer.stage1_optimizer, "bananas") and hasattr(
+                self.optimizer.stage1_optimizer.bananas,
+                "internal_early_stopping_events",
+            ):
+                events_to_log = self.optimizer.stage1_optimizer.bananas.internal_early_stopping_events
+
+        if events_to_log is not None:
+            self.search_trajectory.internal_early_stopping_events = events_to_log
+
         if not os.path.exists(self.config.save):
             os.makedirs(self.config.save)
         if not self.lightweight_output:

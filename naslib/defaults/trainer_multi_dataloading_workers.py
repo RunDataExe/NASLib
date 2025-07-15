@@ -100,6 +100,7 @@ class Trainer(object):
                 "train_time": [],
                 "arch_eval": [],
                 "params": n_parameters,
+                "internal_early_stopping_events": [],  # For Bananas-like optimizers
             }
         )
 
@@ -886,6 +887,12 @@ class Trainer(object):
 
     def _log_to_json(self):
         """log training statistics to json file"""
+        # Check for internal early stopping events on the optimizer
+        if hasattr(self.optimizer, "internal_early_stopping_events"):
+            self.search_trajectory.internal_early_stopping_events = (
+                self.optimizer.internal_early_stopping_events
+            )
+
         if not os.path.exists(self.config.save):
             os.makedirs(self.config.save)
         if not self.lightweight_output:

@@ -143,10 +143,20 @@ def main():
     # Filter trials based on cumulative runtime
     permitted_trials = []
     cumulative_runtime = 0.0
-    # Sort trials by number to process them sequentially
-    sorted_trials = sorted(
-        original_study.get_trials(deepcopy=False), key=lambda t: t.number
+
+    # --- MODIFICATION START ---
+    # Get all trials that have finished, including both COMPLETED and PRUNED trials.
+    # This is crucial because pruned trials still consumed time and resources.
+    all_trials = original_study.get_trials(
+        deepcopy=False, states=(TrialState.COMPLETE, TrialState.PRUNED)
     )
+
+    # Sort trials by their actual completion timestamp to respect the HPO scheduler's timeline
+    sorted_trials = sorted(all_trials, key=lambda t: t.datetime_complete)
+    logging.info(
+        f"Processing {len(sorted_trials)} finished (COMPLETE or PRUNED) trials sorted by completion time."
+    )
+    # --- MODIFICATION END ---
 
     for trial in sorted_trials:
         runtime = get_trial_runtime(
@@ -159,21 +169,25 @@ def main():
             zcp_method,
         )
 
-        if trial.state != TrialState.COMPLETE:
+        # This check is now implicitly handled by the get_trials filter, but is good for safety.
+        if trial.state not in [TrialState.COMPLETE, TrialState.PRUNED]:
             logging.warning(
-                f"Trial {trial.number} did not complete (State: {trial.state}). Stopping here."
+                f"Skipping trial {trial.number} with unexpected state: {trial.state}."
             )
-            break  # Stop if a trial in the sequence is not complete
+            continue
 
         if cumulative_runtime + runtime <= args.timeout:
             cumulative_runtime += runtime
-            permitted_trials.append(trial)
+            # We only add the trial to the *final* study if it was actually successful,
+            # but we always count its runtime.
+            if trial.state == TrialState.COMPLETE:
+                permitted_trials.append(trial)
             logging.info(
-                f"Trial {trial.number} is PERMITTED. Cumulative runtime: {cumulative_runtime:.2f}s / {args.timeout}s."
+                f"Trial {trial.number} (State: {trial.state}) is COUNTED. Cumulative runtime: {cumulative_runtime:.2f}s / {args.timeout}s."
             )
         else:
             logging.warning(
-                f"Trial {trial.number} is EXCLUDED. Cumulative runtime would be {cumulative_runtime + runtime:.2f}s > {args.timeout}s. Stopping."
+                f"Trial {trial.number} (completed at {trial.datetime_complete}) is EXCLUDED. Cumulative runtime would be {cumulative_runtime + runtime:.2f}s > {args.timeout}s. Stopping."
             )
             break  # Stop including trials once the cumulative timeout is exceeded
 
@@ -206,6 +220,7 @@ def main():
     # Add the permitted trials to the new study, preserving their original values and states.
     for trial in permitted_trials:
         # Create a new trial in the new study with the same parameters and outcome
+        # Only completed trials are in `permitted_trials`, so this is safe.
         filtered_study.add_trial(
             optuna.trial.create_trial(
                 state=trial.state,

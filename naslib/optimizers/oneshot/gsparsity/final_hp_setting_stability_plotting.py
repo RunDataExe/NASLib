@@ -53,6 +53,9 @@ import re
 from collections import defaultdict
 import matplotlib.colors as mcolors
 
+# Dataset classes for random guess calculation
+DATASET_CLASSES = {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120}
+
 # Default color and style settings for plots
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
@@ -126,7 +129,7 @@ def find_error_files(root_dir):
     return error_files
 
 
-def process_run_data(filepath, acc_metric):
+def process_run_data(filepath, acc_metric, dataset):
     """Loads and processes a single run from an errors.json file."""
     with open(filepath, "r") as f:
         data = json.load(f)
@@ -170,6 +173,12 @@ def process_run_data(filepath, acc_metric):
     # If after processing, we have less than 1 point, we can't plot or calculate AUC.
     if len(acc) < 1:
         return None, None, None
+
+    # Prepend a random guess at time=0
+    num_classes = DATASET_CLASSES.get(dataset, 10)  # Default to 10 if unknown
+    random_guess_acc = 1.0 / num_classes
+    cumulative_time = np.insert(cumulative_time, 0, 0)
+    acc = np.insert(acc, 0, random_guess_acc)
 
     # The user wants to see the raw performance, not just the incumbent.
     # incumbent_acc = np.maximum.accumulate(acc)
@@ -218,9 +227,17 @@ def plot_anytime_stability(
     if combine_plots:
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
-        plot_title = (
-            f"Anytime Stability Comparison\n{acc_metric.replace('_', ' ').title()}"
-        )
+        # Extract dataset from the first group for the title
+        first_group_key = next(iter(grouped_runs.keys()), None)
+        if first_group_key:
+            dataset_title = first_group_key[1].upper()
+            search_space_title = "NAS-Bench-201"  # Assuming this for now
+            if acc_metric == "valid_acc":
+                plot_title = f"Anytime Raw Validation Stability | {dataset_title} | {search_space_title}"
+            else:
+                plot_title = f"Anytime Raw Training Stability | {dataset_title} | {search_space_title}"
+        else:
+            plot_title = f"Anytime Raw Stability Comparison\n{acc_metric.replace('_', ' ').title()}"
     else:
         ax = None  # Will be created inside the loop
 
@@ -235,7 +252,7 @@ def plot_anytime_stability(
         all_aucs = []
         all_trajectories = []
         all_valid_runs_meta = []  # Store metadata for valid runs
-        group_label = f"{optimizer}_{dataset}"
+        group_label = f"{optimizer}"
         color = COLORS[group_idx % len(COLORS)]
         fmt = FMTS[group_idx % len(FMTS)]
 
@@ -243,7 +260,7 @@ def plot_anytime_stability(
 
         # Process runs and collect valid data first
         for run_meta in runs:
-            time, acc, run_auc = process_run_data(run_meta["path"], acc_metric)
+            time, acc, run_auc = process_run_data(run_meta["path"], acc_metric, dataset)
             if time is None:
                 print(f"  - Skipping seed {run_meta['seed']} (no data).")
                 continue
@@ -262,6 +279,10 @@ def plot_anytime_stability(
         num_seeds = len(all_trajectories)
         seed_colors = get_color_shades(color, num_seeds)
 
+        # Create a common time grid for interpolation
+        max_time = max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
+        time_grid = np.linspace(0, max_time, 500)
+
         # Plot individual runs from the collected valid data
         if not combine_plots:
             # For individual plots, label each seed clearly
@@ -273,17 +294,17 @@ def plot_anytime_stability(
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1  # Make '+' thicker
 
+                # Plot the raw data points as markers
                 ax.plot(
-                    time,
-                    acc,
-                    color=seed_colors[i],
-                    alpha=0.9,
-                    linestyle=":",
+                    time[1:],  # Exclude the t=0 random guess point
+                    acc[1:],
+                    linestyle="None",  # No line connecting markers
                     marker=marker,
-                    markersize=current_markersize,  # Use the adjusted size
-                    markeredgewidth=current_markeredgewidth,  # Use the adjusted width
-                    markevery=max(1, len(time) // 10),  # Avoid over-cluttering
-                    label=f"Seed {run_meta['seed']}",
+                    color=seed_colors[i],
+                    markersize=current_markersize,
+                    markeredgewidth=current_markeredgewidth,
+                    alpha=0.9,
+                    label=None,  # Legend handled manually later
                 )
         else:
             # For combined plot, use method-specific colors for seeds, but a single legend entry
@@ -295,25 +316,21 @@ def plot_anytime_stability(
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1
 
+                # Plot the raw data points as markers
                 ax.plot(
-                    time,
-                    acc,
-                    color=seed_colors[i],  # Use the derived shade for each seed
-                    alpha=0.7,
-                    linestyle=":",
-                    linewidth=1.2,
+                    time[1:],  # Exclude the t=0 random guess point
+                    acc[1:],
+                    linestyle="None",
                     marker=marker,
+                    color=seed_colors[i],  # Use the derived shade for each seed
                     markersize=current_markersize,
                     markeredgewidth=current_markeredgewidth,
-                    markevery=max(1, len(time) // 20),
+                    alpha=0.7,
                     label=None,  # Labeling is handled manually later
                 )
 
         # --- Aggregation and Mean Plot ---
         # Create a common time grid for interpolation
-        max_time = max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
-        time_grid = np.linspace(0, max_time, 500)
-
         interpolated_accs = []
         for time, acc in all_trajectories:
             # Ensure time is monotonically increasing for interpolation
@@ -333,19 +350,38 @@ def plot_anytime_stability(
         # --- Plotting Stability Area ---
         # Construct the label for the legend
         num_seeds = len(all_trajectories)
-        instability_label = f"{group_label} ({num_seeds} seeds)"
+        instability_label = f"{group_label}"
         if show_auc_text:
             instability_label += f" | Instability AUC: {instability_auc:.2f}"
 
-        # Fill the area between the min and max seed performance to show instability
+        # --- Plotting Stability Area with Split Alpha ---
+        # Find the average time of the first real data point to split the fill area
+        first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
+        if first_real_times:
+            avg_first_real_time = np.mean(first_real_times)
+            split_idx = np.searchsorted(time_grid, avg_first_real_time)
+        else:
+            split_idx = 0  # Default to no split if no data
+
+        # Plot the "estimated" part of the instability area (lighter)
+        ax.fill_between(
+            time_grid[: split_idx + 1],
+            min_acc[: split_idx + 1],
+            max_acc[: split_idx + 1],
+            color=color,
+            alpha=0.15,  # Lighter fill
+            label=None,  # Label is on the heavier part
+        )
+
+        # Plot the "real" part of the instability area (heavier)
         # This now carries the main label for the method in combined plots.
         ax.fill_between(
-            time_grid,
-            min_acc,
-            max_acc,
+            time_grid[split_idx:],
+            min_acc[split_idx:],
+            max_acc[split_idx:],
             color=color,
-            alpha=0.25,
-            label=instability_label if combine_plots else None,
+            alpha=0.3,  # Heavier fill
+            label=instability_label,
         )
 
         if show_auc_fill:
@@ -355,23 +391,54 @@ def plot_anytime_stability(
 
         # --- Final Plot Configuration (for individual plots) ---
         if not combine_plots:
-            # For individual plots, create a custom legend
             from matplotlib.lines import Line2D
             from matplotlib.patches import Patch
 
-            handles, _ = ax.get_legend_handles_labels()  # Gets seed line handles
-            instability_patch = Patch(
-                facecolor=color,
-                alpha=0.4,
-                label=f"Instability Area (AUC: {instability_auc:.2f})",
-            )
-            handles.insert(0, instability_patch)
+            # Get existing handles and labels (should just be the instability area)
+            handles, labels = ax.get_legend_handles_labels()
 
-            ax.legend(handles=handles, loc="upper left")
-            ax.set_xlabel("Runtime (seconds) [log scale]")
-            ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
-            ax.set_title(f"Anytime Stability: {optimizer}\n{dataset} on {search_space}")
+            # Create custom legend handles for each seed's marker
+            seed_handles = []
+            seed_labels = []
+            # Sort by seed number for consistent legend order
+            for run_meta in sorted(all_valid_runs_meta, key=lambda x: int(x["seed"])):
+                seed = run_meta["seed"]
+                marker = seed_to_marker.get(seed, "x")
+                # Create a handle for each seed with the method's color
+                seed_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        linestyle="None",
+                        marker=marker,
+                        color=color,
+                        markersize=8,
+                    )
+                )
+                seed_labels.append(f"{seed}")
+
+            # Combine handles and create the legend
+            ax.legend(
+                handles=handles + seed_handles,
+                labels=labels + seed_labels,
+                loc="upper left",
+                ncol=1,
+            )
+
+            ax.set_xlabel("Runtime (s) [Log Scale]")
+            if acc_metric == "valid_acc":
+                ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
+                ax.set_title(
+                    f"Anytime Raw Validation Stability | {dataset.upper()} | NAS-Bench-201"
+                )
+            else:
+                ax.set_ylabel("Raw Training Accuracy (%) [Linear Scale]")
+                ax.set_title(
+                    f"Anytime Raw Training Stability | {dataset.upper()} | NAS-Bench-201"
+                )
             ax.set_xscale("log")
+            ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+            ax.set_ylim(bottom=0)  # Start y-axis at 0
             ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
             ax.grid(True, which="both", ls="-", alpha=0.5)
 
@@ -386,28 +453,45 @@ def plot_anytime_stability(
     # --- Final Plot Configuration (for combined plot) ---
     if combine_plots:
         from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
 
         # Get existing handles and labels from the plot (these are the instability areas)
         handles, labels = ax.get_legend_handles_labels()
 
-        # Create a single, representative legend entry for all individual seed runs
-        seed_legend_handle = Line2D(
-            [0],
-            [0],
-            color="black",
-            linestyle=":",
-            marker=".",
-            markersize=8,
-            label="Individual Seeds (per method)",
+        # Create custom legend handles for each seed's marker, but in gray
+        seed_handles = []
+        seed_labels = []
+        # Use the global seed_to_marker map for a complete legend
+        for seed, marker in sorted(seed_to_marker.items()):
+            seed_handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    linestyle="None",
+                    marker=marker,
+                    color="gray",
+                    markersize=8,
+                )
+            )
+            seed_labels.append(f"{seed}")
+
+        # Combine handles and create the legend in the desired order
+        ax.legend(
+            handles=handles + seed_handles,
+            labels=labels + seed_labels,
+            loc="upper left",
+            ncol=1,  # vertical
         )
 
-        # Prepend the custom handle to the existing ones
-        ax.legend(handles=[seed_legend_handle] + handles, loc="upper left")
-
-        ax.set_xlabel("Runtime (seconds) [log scale]")
-        ax.set_ylabel(f"{acc_metric.replace('_', ' ').title()} [linear scale]")
+        ax.set_xlabel("Runtime (s) [Log Scale]")
+        if acc_metric == "valid_acc":
+            ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
+        else:
+            ax.set_ylabel("Raw Training Accuracy (%) [Linear Scale]")
         ax.set_title(plot_title)
         ax.set_xscale("log")
+        ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+        ax.set_ylim(bottom=0)  # Start y-axis at 0
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 

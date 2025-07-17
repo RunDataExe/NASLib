@@ -395,7 +395,11 @@ def plot_anytime_stability(
             from matplotlib.patches import Patch
 
             # Get existing handles and labels (should just be the instability area)
-            handles, labels = ax.get_legend_handles_labels()
+            _, labels = ax.get_legend_handles_labels()
+
+            # Create a custom handle for the instability area with the heavier alpha
+            instability_handle = Patch(facecolor=color, alpha=0.3)
+            handles = [instability_handle]
 
             # Create custom legend handles for each seed's marker
             seed_handles = []
@@ -455,7 +459,9 @@ def plot_anytime_stability(
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
 
-        # Get existing handles and labels from the plot (these are the instability areas)
+        # Get existing handles and labels from the plot.
+        # This will correctly pick up the handles from the 'heavier' fill_between calls
+        # because only those had a label assigned.
         handles, labels = ax.get_legend_handles_labels()
 
         # Create custom legend handles for each seed's marker, but in gray

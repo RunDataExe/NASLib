@@ -1098,7 +1098,9 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     else:
         from naslib.defaults.trainer_multi_dataloading_workers import Trainer
 
-        trainer = Trainer(optimizer, config, lightweight_output=True)
+        trainer = Trainer(
+            optimizer, config, lightweight_output=False
+        )  #! just changed to true
 
     search_resume_from = ""
     eval_resume_from = ""

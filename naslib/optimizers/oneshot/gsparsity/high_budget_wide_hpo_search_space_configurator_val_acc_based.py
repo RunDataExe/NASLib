@@ -251,6 +251,9 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 
 
+# Use these functions to decide which trials to retry or skip
+# ...existing code...
+
 # Maybe the problem is also related to the change of the logger in the configurator. As the statedict in the log says it is not complete thus the checkpoint after completing one epoch with gsparsity should also contain less. Or is this the case and my logging / printing information is just not nuanced enough to capture this?
 
 # have look at log.log file
@@ -267,7 +270,7 @@ torch.manual_seed(seed)
 #! use logarithmic for left bounded [0,infinit]; [log a, log b] bischlHyperparameterOptimizationFoundations2021
 #! should I use holdout/cross validation?
 
-#! Multiply time that it takes for random search by a factor that captures the prunning rate that was used in the zcp-gs-nas and gs-nas methods, how to make it such that only the search of the second phase is pruned? Should I not take 3 zcp´s per condition but have it as HP that is automatically tuned as well? Thus able to have more compute to tune one methodoligy and probably better results.
+#! Multiply time that it takes for random search by a factor that captures the prunning rate that was used in the zcpgs-nas and gs-nas methods, how to make it such that only the search of the second phase is pruned? Should I not take 3 zcp´s per condition but have it as HP that is automatically tuned as well? Thus able to have more compute to tune one methodoligy and probably better results.
 
 #! Use the same random seeds for compared conditions, such that results are more comparable as they start more simililar e.g. param initialization, which images are sampled etc.
 
@@ -345,28 +348,45 @@ def _clear_logging_handlers():
                 logger.removeHandler(handler)
 
 
-def objective(trial: optuna.trial.Trial) -> float:
-    """
-    Objective function for Optuna HPO.
-    """
-    # --- Handle re-running of completed trials ---
-    if trial.user_attrs.get("fixed_params", False):
-        # This trial was enqueued because it was already completed.
-        # We find the original trial with these exact parameters and return its value.
-        all_trials = trial.study.get_trials(
-            deepcopy=False, states=[optuna.trial.TrialState.COMPLETE]
-        )
-        for t in all_trials:
-            if t.params == trial.params:
-                logging.info(
-                    f"Skipping trial {trial.number} as it's a duplicate of completed trial {t.number}. Returning value: {t.value}"
-                )
-                return t.value
-        # Fallback if the original is not found (e.g., it was pruned). Let it run.
-        logging.warning(
-            f"Trial {trial.number} was enqueued but no matching COMPLETED trial was found. It will be run as a new trial."
-        )
+logging.getLogger("sampler").setLevel(logging.INFO)
 
+import hashlib
+
+
+def trial_hash(hp_config):
+    """
+    Returns a deterministic hash for a hyperparameter configuration.
+    """
+    # Serialize config as a sorted JSON string
+    config_str = json.dumps(hp_config, sort_keys=True)
+    return hashlib.md5(config_str.encode("utf-8")).hexdigest()
+
+
+def is_trial_run(hp_config, run_hashes):
+    """
+    Checks if the trial (hp_config) has already been run.
+    run_hashes: set of hashes of already run configs
+    """
+    return trial_hash(hp_config) in run_hashes
+
+
+# import pprint
+
+
+# def debug_trial_params(trial_a, trial_b):
+#     print("Trial A params:")
+#     pprint.pprint(trial_a.params)
+#     print("Trial B params:")
+#     pprint.pprint(trial_b.params)
+#     print("Trial A types:")
+#     pprint.pprint({k: type(v) for k, v in trial_a.params.items()})
+#     print("Trial B types:")
+#     pprint.pprint({k: type(v) for k, v in trial_b.params.items()})
+#     print("Are dicts equal?", trial_a.params == trial_b.params)
+
+
+def objective(trial):
+    # If not pruned above, this is a new trial or the last failed trial to retry
     config = {}
 
     if optimizer_type == "gsparsity":
@@ -733,6 +753,57 @@ def objective(trial: optuna.trial.Trial) -> float:
         "patience": 7,  # Number of epochs to wait for improvement
         "threshold": 0.0001,  # Minimum change to be considered an improvement
     }
+
+    all_trials = trial.study.get_trials(deepcopy=False)
+    hashed_pruned_or_completed_trials = {
+        trial_hash(t.params)
+        for t in all_trials
+        if t.state in [TrialState.COMPLETE, TrialState.PRUNED]
+    }
+    logging.debug(
+        f"Number of completed/pruned trials: {len(hashed_pruned_or_completed_trials)}"
+    )
+
+    failed_trials = [t for t in all_trials if t.state == TrialState.FAIL]
+    logging.debug(f"Number of failed trials: {len(failed_trials)}")
+    last_failed = max(failed_trials, key=lambda t: t.number) if failed_trials else None
+    hashed_last_failed = trial_hash(last_failed.params) if last_failed else None
+    logging.debug(
+        f"Last failed trial hash: {hashed_last_failed}"
+        if hashed_last_failed
+        else "No failed trials."
+    )
+    logging.debug(
+        f"Last failed trial number: {last_failed.number}"
+        if last_failed
+        else "No failed trials."
+    )
+    logging.debug(f"Current trial number: {trial.number}")
+
+    current_hash = trial_hash(trial.params)
+    logging.debug(f"Current trial hash: {current_hash}")
+    logging.debug(
+        f"All pruned/completed trial hashes: {hashed_pruned_or_completed_trials}"
+    )
+    logging.debug(f"Last failed trial hash: {hashed_last_failed}")
+    # Skip if trial already completed/pruned
+    if current_hash in hashed_pruned_or_completed_trials:
+        raise optuna.TrialPruned()
+
+    # If there was a failed trial, only resume it (prune others directly)
+    if current_hash == hashed_last_failed:
+        trial.set_user_attr("original_trial_number", last_failed.number)
+
+    # logging.debug(
+    #         "Comparing all trials to find duplicates or similar configurations..."
+    #     )
+    # num_trials = len(all_trials)
+    # for i in range(num_trials):
+    #     for j in range(num_trials):
+    #         logging.debug(
+    #             f"Comparing trial {i} with trial {j} (number: {all_trials[i].number}, {all_trials[j].number})"
+    #         )
+    #         debug_trial_params(all_trials[i], all_trials[j])
 
     # Convert dictionary to CfgNode
     config = CfgNode.load_cfg(json.dumps(config))
@@ -1168,7 +1239,7 @@ def main():
     #     pass
 
     # DEHB setup
-    module = optunahub.load_module("samplers/dehb")
+    module = optunahub.load_module("samplers/dehb", force_reload=False)
     DEHBSampler = module.DEHBSampler
     DEHBPruner = module.DEHBPruner
 
@@ -1215,33 +1286,6 @@ def main():
         direction="maximize",  # We maximize validation accuracy
         study_name=study_name,
     )
-
-    # --- Find and enqueue failed or interrupted trials to re-run them ---
-    failed_trials = study.get_trials(
-        deepcopy=False,
-        states=[optuna.trial.TrialState.FAIL, optuna.trial.TrialState.RUNNING],
-    )
-    for trial_to_retry in failed_trials:
-        # For running trials, we assume they were interrupted.
-        # For failed trials, we want to retry them.
-        logging.info(
-            f"Enqueuing failed/interrupted trial {trial_to_retry.number} to be re-run."
-        )
-        # Pass the original trial number in user_attrs so we know where to find the checkpoint
-        attrs = {"original_trial_number": trial_to_retry.number}
-        study.enqueue_trial(trial_to_retry.params, user_attrs=attrs)
-
-    # --- Find and enqueue completed trials to avoid re-running them ---
-    # This is a workaround to make the study aware of past results when resuming
-    # with samplers that might suggest the same parameters again.
-    completed_trials = study.get_trials(
-        deepcopy=False, states=[optuna.trial.TrialState.COMPLETE]
-    )
-    for trial in completed_trials:
-        study.enqueue_trial(trial.params, user_attrs={"fixed_params": True})
-        logging.info(
-            f"Enqueued previously completed trial {trial.number} to avoid re-running."
-        )
 
     # Start optimization
     try:

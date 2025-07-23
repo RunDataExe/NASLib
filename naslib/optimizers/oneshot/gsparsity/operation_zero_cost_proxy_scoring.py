@@ -281,18 +281,19 @@ def evaluate_micro_architecture_zcp(
         ZCP score for the synthetic architecture.
     """
     if zcp_method.lower() in ["params"]:
-        params = sum(p.numel() for p in operation.parameters() if p.requires_grad)
-        intermediate_params = torch.log(
-            torch.tensor(params, dtype=torch.float32) / 100 + 1e-6
-        )
-        final_param = torch.sigmoid(torch.tensor(params, dtype=torch.float32)).item()
-        final_param_scaled = torch.sigmoid(
-            torch.tensor(intermediate_params, dtype=torch.float32)
-        ).item()
-        logger.info(
-            f"Raw params: {params:.6f}, Log-scaled params: {intermediate_params:.6f}, Sigmoid mapped without log-scaling params: {final_param:.6f}, Sigmoid mapped with log-scaling params: {final_param_scaled:.6f}"
-        )
-        return final_param_scaled
+        params = sum(p.numel() for p in operation.parameters())
+        # intermediate_params = torch.log(
+        #     torch.tensor(params, dtype=torch.float32) / 100 + 1e-6
+        # )
+        # final_param = torch.sigmoid(torch.tensor(params, dtype=torch.float32)).item()
+        # final_param_scaled = torch.sigmoid(
+        #     torch.tensor(intermediate_params, dtype=torch.float32)
+        # ).item()
+        # logger.info(
+        #     f"Raw params: {params:.6f}, Log-scaled params: {intermediate_params:.6f}, Sigmoid mapped without log-scaling params: {final_param:.6f}, Sigmoid mapped with log-scaling params: {final_param_scaled:.6f}"
+        # )
+        # return final_param_scaled
+        return params
 
     # Determine num_classes based on the dataset
     if "cifar" in dataset.lower():
@@ -419,22 +420,25 @@ def evaluate_micro_architecture_zcp(
         else:
             # For most ZCPs (higher is better), use as is.
             intermediate_score = float(score)
-            logger.info(f"ZCP score ({zcp_method}): {intermediate_score:.6f}")
+            logger.info(
+                f"Intermediate ZCP score ({zcp_method}): {intermediate_score:.6f}"
+            )
 
-        # # Apply sigmoid to map the score to [0, 1]
-        # final_score_tensor = torch.sigmoid(
-        #     torch.tensor(intermediate_score, dtype=torch.float32)
-        # )
-        # final_score = final_score_tensor.item()
-        final_score_tensor = F.softplus(
-            torch.tensor(intermediate_score, dtype=torch.float32)
-        )
-        final_score = final_score_tensor.item()
-        logger.info(
-            f"Intermediate score: {intermediate_score:.6f}, Softplus mapped score: {final_score:.6f}"
-        )
+            # # # Apply sigmoid to map the score to [0, 1]
+            # # final_score_tensor = torch.sigmoid(
+            # #     torch.tensor(intermediate_score, dtype=torch.float32)
+            # # )
+            # # final_score = final_score_tensor.item()
+            # final_score_tensor = F.softplus(
+            #     torch.tensor(intermediate_score, dtype=torch.float32)
+            # )
+            # final_score = final_score_tensor.item()
+            # logger.info(
+            #     f"Intermediate score: {intermediate_score:.6f}, Softplus mapped score: {final_score:.6f}"
+            # )
 
-        return final_score
+            # return final_score
+            return intermediate_score
 
     except Exception as e:
         logger.error(

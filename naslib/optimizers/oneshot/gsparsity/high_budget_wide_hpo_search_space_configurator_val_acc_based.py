@@ -160,6 +160,10 @@ from naslib.optimizers import (
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
+from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
+    ZCP_GSparseOptimizer as ZCP_GSparseOptimizer,
+)
+
 from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
 )
@@ -819,13 +823,11 @@ def objective(trial):
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
-        # For two-stage, set 1 epoch for each stage
         config.search.epochs = 70
         config.stage1.search.epochs = 20
         config.stage1.search.train_epochs = 7
         config.stage2.search.epochs = 50
     else:
-        # For one-stage methods, set 1 epoch
         config.search.epochs = 70
 
     # Update config with other details
@@ -1252,10 +1254,10 @@ def main():
     ]:
         max_res = 70
         min_res = 21
+        # min_res = 1
     else:
         max_res = 70
-        # min_res = 1
-        min_res = 2
+        min_res = 1
 
     sampler = DEHBSampler(seed=seed)
     pruner = DEHBPruner(min_resource=min_res, max_resource=max_res, reduction_factor=3)

@@ -395,7 +395,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             max(raw_zero_cost_proxy_scores),
         )
 
-        if self.zcp_method == "jacov":
+        if self.zcp_method == "jacov" or self.zcp_method == "synflow":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
@@ -403,18 +403,18 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 return (raw_score - min) / (max - min)
 
-        elif self.zcp_method == "synflow":
-
-            def normalize(raw_score, min=min_zcp, max=max_zcp):
-                """
-                Normalize using shifted log transformed min-max normalization.
-                """
-                shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
-                shifted_min_log = np.log(min + abs(min) + 0.000000001)
-                shifted_max_log = np.log((max + abs(min) + 0.000000001))
-                return (shifted_log_score - shifted_min_log) / (
-                    shifted_max_log - shifted_min_log
-                )
+        # elif self.zcp_method == "synflow":
+        # was normalized already after zcp calculation
+        # def normalize(raw_score, min=min_zcp, max=max_zcp):
+        #     """
+        #     Normalize using shifted log transformed min-max normalization.
+        #     """
+        #     shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
+        #     shifted_min_log = np.log(min + abs(min) + 0.000000001)
+        #     shifted_max_log = np.log((max + abs(min) + 0.000000001))
+        #     return (shifted_log_score - shifted_min_log) / (
+        #         shifted_max_log - shifted_min_log
+        #     )
 
         else:
 
@@ -692,7 +692,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             max(raw_zero_cost_proxy_scores),
         )
 
-        if self.zcp_method == "jacov":
+        if self.zcp_method == "jacov" or self.zcp_method == "synflow":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
@@ -700,18 +700,18 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 return (raw_score - min) / (max - min)
 
-        elif self.zcp_method == "synflow":
-
-            def normalize(raw_score, min=min_zcp, max=max_zcp):
-                """
-                Normalize using shifted log transformed min-max normalization.
-                """
-                shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
-                shifted_min_log = np.log(min + abs(min) + 0.000000001)
-                shifted_max_log = np.log(max + abs(min) + 0.000000001)
-                return (shifted_log_score - shifted_min_log) / (
-                    shifted_max_log - shifted_min_log
-                )
+        # elif self.zcp_method == "synflow":
+        # was normalized already after zcp calculation
+        # def normalize(raw_score, min=min_zcp, max=max_zcp):
+        #     """
+        #     Normalize using shifted log transformed min-max normalization.
+        #     """
+        #     shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
+        #     shifted_min_log = np.log(min + abs(min) + 0.000000001)
+        #     shifted_max_log = np.log((max + abs(min) + 0.000000001))
+        #     return (shifted_log_score - shifted_min_log) / (
+        #         shifted_max_log - shifted_min_log
+        #     )
 
         else:
 

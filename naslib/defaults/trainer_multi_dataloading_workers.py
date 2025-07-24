@@ -788,7 +788,7 @@ class Trainer(object):
             save_dir=self.config.save + "/search"
             if search
             else self.config.save + "/eval",
-            # **checkpointables #NOTE: this is throwing an Error
+            **checkpointables,
         )
 
         self.periodic_checkpointer = PeriodicCheckpointer(

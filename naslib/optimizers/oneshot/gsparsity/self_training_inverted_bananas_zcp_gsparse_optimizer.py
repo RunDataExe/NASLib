@@ -1,3 +1,5 @@
+#
+#!!!! check if resuming from first stage also saves archs that should be pruned
 import logging
 import torch
 import numpy as np
@@ -46,7 +48,9 @@ class Inverted_Bananas_ZCP_GsparseOptimizer(MetaOptimizer):
         self.stage1_config.search.seed = config.search.seed
         self.stage1_epochs = self.stage1_config.search.epochs
         self.removal_percentage = self.stage1_config.search.removal_percentage
-
+        logger.info(
+            "Not sure if the resumption of the list of architectures that should be removed works, when resuming from the first stage. If this is needed verify first."
+        )
         logger.info(
             f"Stage 1 (Inverted BANANAS) will run for {self.stage1_epochs} epochs."
         )

@@ -1,7 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from naslib.predictors import ZeroCost
+
+# from naslib.predictors import ZeroCost
+from naslib.predictors.zerocost_no_post_processing import (
+    ZeroCost,
+)  # Ensure this import matches your project structure
 import logging
 import math  # Ensure math is imported for isnan/isinf if used by ZeroCost or its callees
 from naslib.search_spaces.core.primitives import AbstractPrimitive  # Add this import

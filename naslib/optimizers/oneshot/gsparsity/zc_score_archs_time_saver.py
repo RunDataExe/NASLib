@@ -79,7 +79,7 @@ def main():
         config, train_workers=0, val_workers=0
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    save_path = f"naslib/optimizers/oneshot/gsparsity/arch_scores_{args.dataset}.json"
+    save_path = f"naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores_{args.dataset}.json"
 
     scores = score_and_save_architectures(graph, train_loader, device, save_path)
     print(f"Scored {len(scores)} architectures and saved to {save_path}")

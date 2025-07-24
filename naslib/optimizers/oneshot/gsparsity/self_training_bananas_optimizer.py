@@ -42,10 +42,10 @@ _COMP_FACTOR_CONFIG_TEMPLATE = {
     "data": str(get_project_root() / "data"),
     "search_space": "nasbench201",
     "optimizer": "eval_only",
-    "seed": 42,
+    "seed": 1544457859,
     "out_dir": "comp_factor_exp",
     "search": {
-        "seed": 42,
+        "seed": 1544457859,
         "epochs": 1,
         "batch_size": 256,
         "train_portion": 0.5,
@@ -90,6 +90,9 @@ class Bananas(MetaOptimizer):
         self.train_config.dataset = config.dataset
         self.train_config.seed = config.search.seed
         self.train_config.data = config.data
+        # Inherit the dataset subset percentage for HPO
+        if hasattr(config, "dataset_subset"):
+            self.train_config.dataset_subset = config.dataset_subset
         # Set epochs for internal training
         self.train_config.evaluation.epochs = self.train_epochs
         # Allow overriding batch size from the main config's search section

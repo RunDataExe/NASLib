@@ -9,6 +9,9 @@ import optunahub
 import copy
 import time
 
+import torch
+import numpy as np
+
 from naslib.optimizers import (
     RandomSearch,
     LocalSearch,
@@ -19,6 +22,18 @@ from naslib.optimizers import (
     Inverted_Bananas,
     Inverted_Bananas_GsparseOptimizer,
     Inverted_Bananas_ZCP_GsparseOptimizer,
+)
+
+#!!!!!!!
+from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
+    ZCP_GSparseOptimizer as ZCP_GSparseOptimizer,
+)
+
+from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_Gsparse import (
+    GSparseOptimizer as PreZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_zcp_minmax_gsparse_optimizer import (
+    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
 )
 
 # Add imports for self-training optimizers
@@ -34,6 +49,7 @@ from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_
 from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
 )
+
 
 from naslib import utils
 from naslib.search_spaces import NasBench201SearchSpace, NasBench301SearchSpace
@@ -109,6 +125,8 @@ eval_epochs = args.eval_epochs
 zcp_method = args.zcp_method
 resume = args.resume
 
+np.random.seed(seed)
+torch.manual_seed(seed)
 
 # Standard Query-based: comp_factor * scaling_epochs 200
 # Query-based Self-Training: scaling_epochs / 200 * comp_factor
@@ -257,6 +275,45 @@ optimizer_configs = {
             "learning_rate_min": 0.0,  # originally 0.0001 in gs logs 0.0
             "momentum": 0.9,  # originally 0.9 in gs logs 0.9
             "train_portion": 0.5,  # originally 0.95 in gs logs 0.5
+        },
+    },
+    "zcp-pre_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
+        "search": {
+            "checkpoint_freq": 1,  #!
+            "epochs": search_epochs,  # in paper 100
+            "grad_clip": 0,  # in paper 0
+            "weight_decay": 60,  # original 120 in paper 60
+            "threshold": 0.000001,
+            "normalization": "div",  # in paper div
+            "normalization_exponent": 0.5,  # in paper 0.5
+            "learning_rate": 0.0001,  # original 0.01 in paper 0.001 #!!!!!!!!!!!!!!!!!!
+            "momentum": 0.8,  # in paper 0.8
+            "learning_rate_min": 0.0001,  # in paper 0.0001
+            "batch_size": 64,  # original 128; in log 64
+            "train_portion": 0.95,  # originally 0.95 in paper 1
+            "cutout": False,  # # in paper False (I think NASLIB only needs this for gsparsity on nasbench201)
+            "cutout_length": 16,  # in paper 16 (I think NASLIB only needs this for gsparsity on nasbench201) #! activate cutout prob
+            # "cutout_prob":  # (I think NASLIB only needs this for gsparsity on nasbench201)
+        },
+    },
+    "zcp-pre_zcp_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
+        "search": {
+            "checkpoint_freq": 1,  #!
+            "epochs": search_epochs,  # in paper 100
+            "grad_clip": 0,  # in paper 0
+            "weight_decay": 60,  # original 120 in paper 60
+            "threshold": 0.000001,
+            "normalization": "div",  # in paper div
+            "normalization_exponent": 0.5,  # in paper 0.5
+            "learning_rate": 0.0001,  # original 0.01 in paper 0.001 #!!!!!!!!!!!!!!!!!!
+            "momentum": 0.8,  # in paper 0.8
+            "learning_rate_min": 0.0001,  # in paper 0.0001
+            "batch_size": 64,  # original 128; in log 64
+            "train_portion": 0.95,  # originally 0.95 in paper 1
+            "cutout": False,  # # in paper False (I think NASLIB only needs this for gsparsity on nasbench201)
+            "cutout_length": 16,  # in paper 16 (I think NASLIB only needs this for gsparsity on nasbench201) #! activate cutout prob
+            # "cutout_prob":  # (I think NASLIB only needs this for gsparsity on nasbench201)
+            "zcp_method": zcp_method,  #! Enable zero-cost predictors has to be true else it is no zcp_gsparsity
         },
     },
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
@@ -420,7 +477,7 @@ optimizer_configs = {
             "max_mutations": 1,
             "num_candidates": 100,
             "train_epochs": 5,  #!
-            "use_real_time": True,
+            "use_real_time": False,
         },
     },
     "self_training_inverted_bananas": {
@@ -456,7 +513,7 @@ optimizer_configs = {
         "stage1": {
             "search": {
                 "epochs": 3,
-                "train_epochs": 3,  #!
+                "train_epochs": 5,  #!
                 "k": 10,
                 "num_init": 10,
                 "num_ensemble": 5,
@@ -556,6 +613,8 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_zcp_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_gsparsity"
+        or optimizer_type == "zcp-pre_gsparsity"
+        or optimizer_type == "zcp-pre_zcp_gsparsity"
     ):
         config.save_arch_weights = False
 
@@ -609,7 +668,7 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
             )
             config.search.scaling_factor_epochs = train_epochs
             logging.info(
-                f"Self-training (query-based): Scaling NB201 time by train_epochs = {train_epochs}."
+                f"Self-training: Scaling NB201 time by train_epochs = {train_epochs}."
             )
         elif not is_self_training:
             # Standard query-based methods. We want the full 200-epoch time.
@@ -635,6 +694,7 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         )
 
     config.dataset = dataset
+    config.dataset_subset = 0.2  #!
 
     config.data = str(get_project_root()) + "/data"  # path to naslib/data directory
     print(f"Data path: {config.data}")
@@ -732,6 +792,32 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     # Set up the seed
     utils.set_seed(seed)
 
+    search_resume_from = ""
+    eval_resume_from = ""
+
+    if resume:
+        search_resume_from = utils.get_last_checkpoint(config, search=True)
+        logger.info(
+            f"RunOptimizer: utils.get_last_checkpoint(search=True) returned: '{search_resume_from}'"
+        )
+        eval_resume_from = utils.get_last_checkpoint(config, search=False)
+        logger.info(
+            f"RunOptimizer: utils.get_last_checkpoint(search=False) returned: '{eval_resume_from}'"
+        )
+        if search_resume_from:
+            logger.info(
+                f"RunOptimizer: Attempting to resume search from checkpoint: {search_resume_from}"
+            )
+        if eval_resume_from:
+            logger.info(
+                f"RunOptimizer: Attempting to resume evaluation from checkpoint: {eval_resume_from}"
+            )
+    else:
+        logger.info("RunOptimizer: Not resuming (config_node_arg.resume is False).")
+
+    logger.info(
+        f"RunOptimizer: Passing resume_from='{search_resume_from}' to trainer.search()"
+    )
     # Create the search space based on the dataset
     dataset, n_classes = get_valid_dataset_and_classes(search_space_type, dataset)
 
@@ -774,6 +860,10 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         optimizer = SelfTrainingInvertedBananasGsparse(config)
     elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
         optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
+    elif optimizer_type == "zcp-pre_gsparsity":
+        optimizer = PreZCPGSparseOptimizer(config)
+    elif optimizer_type == "zcp-pre_zcp_gsparsity":
+        optimizer = PreZCPZCPGSparseOptimizer(config)
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
@@ -788,6 +878,18 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         )
         optimizer.adapt_search_space(
             search_space=search_space, train_loader=train_loader
+        )
+    elif (
+        optimizer_type == "zcp-pre_gsparsity"
+        or optimizer_type == "zcp-pre_zcp_gsparsity"
+    ):
+        train_loader, _, _, _, _ = get_train_val_loaders(
+            config, train_workers=0, val_workers=0
+        )
+        optimizer.adapt_search_space(
+            search_space=search_space,
+            train_loader=train_loader,
+            resume_from_path=search_resume_from,
         )
     elif optimizer_type in [
         "rs",
@@ -836,42 +938,6 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
 
         trainer = Trainer(optimizer, config, lightweight_output=False)
 
-    search_resume_from = ""
-    eval_resume_from = ""
-    # # # global resume # Access the global resume flag from args
-    # if resume:  # Use the global resume flag
-    #     search_resume_from = utils.get_last_checkpoint(config, search=True)
-    #     eval_resume_from = utils.get_last_checkpoint(config, search=False)
-    #     if search_resume_from:
-    #         logger.info(f"Resuming search from checkpoint: {search_resume_from}")
-    #     if eval_resume_from:
-    #         logger.info(f"Resuming evaluation from checkpoint: {eval_resume_from}")
-
-    # trainer.search(resume_from=search_resume_from, report_incumbent=False)
-
-    if resume:
-        search_resume_from = utils.get_last_checkpoint(config, search=True)
-        logger.info(
-            f"RunOptimizer: utils.get_last_checkpoint(search=True) returned: '{search_resume_from}'"
-        )
-        eval_resume_from = utils.get_last_checkpoint(config, search=False)
-        logger.info(
-            f"RunOptimizer: utils.get_last_checkpoint(search=False) returned: '{eval_resume_from}'"
-        )
-        if search_resume_from:
-            logger.info(
-                f"RunOptimizer: Attempting to resume search from checkpoint: {search_resume_from}"
-            )
-        if eval_resume_from:
-            logger.info(
-                f"RunOptimizer: Attempting to resume evaluation from checkpoint: {eval_resume_from}"
-            )
-    else:
-        logger.info("RunOptimizer: Not resuming (config_node_arg.resume is False).")
-
-    logger.info(
-        f"RunOptimizer: Passing resume_from='{search_resume_from}' to trainer.search()"
-    )
     trainer.search(resume_from=search_resume_from, report_incumbent=False)
 
     # Get the search trajectory

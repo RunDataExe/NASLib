@@ -52,6 +52,7 @@ import shutil
 
 # * OPEN
 #! Today:
+#! TODO the two stage methods do not resume the pruning when 1 stage fails and is resumed
 # TODO set the correct reduction factor etc
 # TODO check resumption / adding trials with new seeding (gsparsity and selftraining_ibo_gsparsity)
 # Todo start iBO GSparsity HPO (CIFAR100)
@@ -169,6 +170,13 @@ from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_
 )
 from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
+)
+
+from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_Gsparse import (
+    GSparseOptimizer as PreZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_zcp_minmax_gsparse_optimizer import (
+    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
 )
 
 from naslib import utils
@@ -424,6 +432,71 @@ def objective(trial):
             },
         }
     elif optimizer_type == "zcp_gsparsity":
+        config = {
+            "search": {
+                "checkpoint_freq": 1,
+                "epochs": search_epochs,
+                "grad_clip": trial.suggest_categorical(
+                    "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                ),
+                "weight_decay": trial.suggest_float(
+                    "weight_decay", 30.0, 150.0, log=True
+                ),
+                "threshold": None,  # Not used in the current implementation of GSparsity
+                # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                "normalization": trial.suggest_categorical(
+                    "normalization", ["none", "mul", "div"]
+                ),
+                "normalization_exponent": trial.suggest_float(
+                    "normalization_exponent", 0.25, 0.75
+                ),
+                "learning_rate": trial.suggest_float(
+                    "learning_rate", 1e-4, 1e-1, log=True
+                ),
+                "momentum": trial.suggest_float("momentum", 0.7, 0.95),
+                "learning_rate_min": trial.suggest_float(
+                    "learning_rate_min", 1e-5, 5e-4, log=True
+                ),
+                "batch_size": trial.suggest_categorical(
+                    "zcp_gsparsitybatch_size", [32, 64, 128]
+                ),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+                "zcp_method": zcp_method,
+            },
+        }
+    elif optimizer_type == "zcp-pre_gsparsity":
+        config = {
+            "search": {
+                "checkpoint_freq": 1,
+                "epochs": search_epochs,
+                "grad_clip": trial.suggest_categorical(
+                    "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                ),
+                "weight_decay": trial.suggest_float(
+                    "weight_decay", 30.0, 150.0, log=True
+                ),
+                "threshold": None,  # Not used in the current implementation of GSparsity
+                # "threshold": trial.suggest_float("threshold", 1e-7, 1e-4, log=True),
+                "normalization": trial.suggest_categorical(
+                    "normalization", ["none", "mul", "div"]
+                ),
+                "normalization_exponent": trial.suggest_float(
+                    "normalization_exponent", 0.25, 0.75
+                ),
+                "learning_rate": trial.suggest_float(
+                    "learning_rate", 1e-4, 1e-1, log=True
+                ),
+                "momentum": trial.suggest_float("momentum", 0.7, 0.95),
+                "learning_rate_min": trial.suggest_float(
+                    "learning_rate_min", 1e-5, 5e-4, log=True
+                ),
+                "batch_size": trial.suggest_categorical(
+                    "zcp_gsparsitybatch_size", [32, 64, 128]
+                ),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+            },
+        }
+    elif optimizer_type == "zcp-pre_zcp_gsparsity":
         config = {
             "search": {
                 "checkpoint_freq": 1,
@@ -893,6 +966,8 @@ def update_config(
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_zcp_gsparsity"
+        or optimizer_type == "zcp-pre_gsparsity"
+        or optimizer_type == "zcp-pre_zcp_gsparsity"
     ):
         config.save_arch_weights = False
 
@@ -1085,6 +1160,27 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     # Set up the seed
     utils.set_seed(seed)
 
+    search_resume_from = ""
+    eval_resume_from = ""
+    if resume:
+        # The resume logic now simply checks the current trial's directory.
+        # The objective function is responsible for populating it with files from a failed run.
+        search_resume_from = utils.get_last_checkpoint(config, search=True)
+        if search_resume_from:
+            logging.info(
+                f"Resume is True. Found checkpoint in current trial directory: {search_resume_from}"
+            )
+        else:
+            logging.info(
+                f"Resume is True, but no checkpoint found in '{config.save}/search'. Starting from scratch."
+            )
+    else:
+        logging.info("Resume is False. Starting from scratch.")
+
+    logger.info(
+        f"RunOptimizer: Passing resume_from='{search_resume_from}' to trainer.search()"
+    )
+
     # Create the search space based on the dataset
     dataset, n_classes = get_valid_dataset_and_classes(search_space_type, dataset)
 
@@ -1115,6 +1211,10 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
         optimizer = SelfTrainingInvertedBananasGsparse(config)
     elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
         optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
+    elif optimizer_type == "zcp-pre_gsparsity":
+        optimizer = PreZCPGSparseOptimizer(config)
+    elif optimizer_type == "zcp-pre_zcp_gsparsity":
+        optimizer = PreZCPZCPGSparseOptimizer(config)
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
@@ -1129,6 +1229,18 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
         )
         optimizer.adapt_search_space(
             search_space=search_space, train_loader=train_loader
+        )
+    elif (
+        optimizer_type == "zcp-pre_gsparsity"
+        or optimizer_type == "zcp-pre_zcp_gsparsity"
+    ):
+        train_loader, _, _, _, _ = get_train_val_loaders(
+            config, train_workers=0, val_workers=0
+        )
+        optimizer.adapt_search_space(
+            search_space=search_space,
+            train_loader=train_loader,
+            resume_from_path=search_resume_from,
         )
     elif optimizer_type in [
         "rs",
@@ -1175,27 +1287,6 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
             optimizer, config, lightweight_output=False
         )  #! just changed to true
 
-    search_resume_from = ""
-    eval_resume_from = ""
-
-    if resume:
-        # The resume logic now simply checks the current trial's directory.
-        # The objective function is responsible for populating it with files from a failed run.
-        search_resume_from = utils.get_last_checkpoint(config, search=True)
-        if search_resume_from:
-            logging.info(
-                f"Resume is True. Found checkpoint in current trial directory: {search_resume_from}"
-            )
-        else:
-            logging.info(
-                f"Resume is True, but no checkpoint found in '{config.save}/search'. Starting from scratch."
-            )
-    else:
-        logging.info("Resume is False. Starting from scratch.")
-
-    logger.info(
-        f"RunOptimizer: Passing resume_from='{search_resume_from}' to trainer.search()"
-    )
     trainer.search(
         resume_from=search_resume_from,
         report_incumbent=False,

@@ -9,7 +9,11 @@ import json
 import os  # Import os for path checking
 
 from naslib.optimizers.core.metaclasses import MetaOptimizer
-from naslib.optimizers.oneshot.gsparsity.zcp_gsparse_optimizer import (
+
+# from naslib.optimizers.oneshot.gsparsity.zcp_gsparse_optimizer import (
+#     ZCP_GSparseOptimizer,
+# )
+from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
     ZCP_GSparseOptimizer,
 )
 from naslib.optimizers.oneshot.gsparsity.inverted_bananas_optimizer import (

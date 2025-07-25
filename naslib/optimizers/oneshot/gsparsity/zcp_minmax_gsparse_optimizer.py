@@ -396,45 +396,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             max(raw_zero_cost_proxy_scores),
         )
 
-        if self.zcp_method == "jacov":
-
-            def normalize(raw_score, min=min_zcp, max=max_zcp):
-                """
-                Normalize using min-max normalization.
-                """
-                return (raw_score - min) / (max - min)
-
-        elif self.zcp_method == "synflow":
-
-            def normalize(raw_score, min=min_zcp, max=max_zcp):
-                """
-                Normalize using shifted log transformed min-max normalization.
-                """
-                if min == 0:
-                    min = 0
-                else:
-                    min = math.log(min) if min > 0 else -math.log(-min)
-
-                if max == 0:
-                    max = 0
-                else:
-                    max = math.log(max) if max > 0 else -math.log(-max)
-
-                if raw_score == 0:
-                    raw_score = 0
-                else:
-                    raw_score = (
-                        math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
-                    )
-
-                shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
-                shifted_min_log = np.log(min + abs(min) + 0.000000001)
-                shifted_max_log = np.log((max + abs(min) + 0.000000001))
-                return (shifted_log_score - shifted_min_log) / (
-                    shifted_max_log - shifted_min_log
-                )
-
-        else:
+        if self.zcp_method == "synflow" or self.zcp_method == "params":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
@@ -444,6 +406,44 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 min_log = np.log(min + 0.000000001)
                 max_log = np.log(max + 0.000000001)
                 return (log_score - min_log) / (max_log - min_log)
+
+        # elif self.zcp_method == "synflow":
+
+        #     def normalize(raw_score, min=min_zcp, max=max_zcp):
+        #         """
+        #         Normalize using shifted log transformed min-max normalization.
+        #         """
+        #         # if min == 0:
+        #         #     min = 0
+        #         # else:
+        #         #     min = math.log(min) if min > 0 else -math.log(-min)
+
+        #         # if max == 0:
+        #         #     max = 0
+        #         # else:
+        #         #     max = math.log(max) if max > 0 else -math.log(-max)
+
+        #         # if raw_score == 0:
+        #         #     raw_score = 0
+        #         # else:
+        #         #     raw_score = (
+        #         #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
+        #         #     )
+
+        #         shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
+        #         shifted_min_log = np.log(min + abs(min) + 0.000000001)
+        #         shifted_max_log = np.log((max + abs(min) + 0.000000001))
+        #         return (shifted_log_score - shifted_min_log) / (
+        #             shifted_max_log - shifted_min_log
+        #         )
+
+        else:
+
+            def normalize(raw_score, min=min_zcp, max=max_zcp):
+                """
+                Normalize using min-max normalization.
+                """
+                return (raw_score - min) / (max - min)
 
         def normalize_zero_cost_proxy_score(edge):
             if edge.data.has("zero_cost_proxy"):
@@ -718,28 +718,28 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 return (raw_score - min) / (max - min)
 
-        elif self.zcp_method == "synflow":
+        elif self.zcp_method == "synflowaaaaaaaaaaaaaa":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
                 Normalize using shifted log transformed min-max normalization.
                 """
-                if min == 0:
-                    min = 0
-                else:
-                    min = math.log(min) if min > 0 else -math.log(-min)
+                # if min == 0:
+                #     min = 0
+                # else:
+                #     min = math.log(min) if min > 0 else -math.log(-min)
 
-                if max == 0:
-                    max = 0
-                else:
-                    max = math.log(max) if max > 0 else -math.log(-max)
+                # if max == 0:
+                #     max = 0
+                # else:
+                #     max = math.log(max) if max > 0 else -math.log(-max)
 
-                if raw_score == 0:
-                    raw_score = 0
-                else:
-                    raw_score = (
-                        math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
-                    )
+                # if raw_score == 0:
+                #     raw_score = 0
+                # else:
+                #     raw_score = (
+                #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
+                #     )
 
                 shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
                 shifted_min_log = np.log(min + abs(min) + 0.000000001)

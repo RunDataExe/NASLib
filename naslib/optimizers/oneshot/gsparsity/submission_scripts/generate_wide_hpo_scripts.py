@@ -11,8 +11,8 @@ def generate_slurm_script(optimizer, dataset, seed, zcp_method):
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=32
-#SBATCH --job-name=wide_hpo_{optimizer}_{dataset}_{seed}
-#SBATCH --output=naslib/optimizers/oneshot/gsparsity/results/slurm/wide_hpo_{optimizer}_{dataset}_{seed}_%j.out
+#SBATCH --job-name=wide_hpo_{optimizer}_{dataset}_{seed}_{zcp_method}
+#SBATCH --output=naslib/optimizers/oneshot/gsparsity/results/slurm/wide_hpo_{optimizer}_{dataset}_{seed}_{zcp_method}_%j.out
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=ruben.weber@students.uni-mannheim.de
 

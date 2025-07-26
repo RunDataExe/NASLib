@@ -300,7 +300,29 @@ class Trainer(object):
                 self.search_trajectory.train_loss.append(self.train_loss.avg)
                 self.search_trajectory.valid_acc.append(self.val_top1.avg)
                 self.search_trajectory.valid_loss.append(self.val_loss.avg)
-                self.search_trajectory.runtime.append(end_time - start_time)
+                runtime = end_time - start_time
+
+                if e == 0 and getattr(
+                    self.config.search, "pre_computed_zc_scores", None
+                ):
+                    pre_computed_zc_scores_path = (
+                        self.config.search.pre_computed_zc_scores
+                        + "_"
+                        + self.config.dataset
+                        + ".json"
+                    )
+                    duration_path = pre_computed_zc_scores_path.replace(
+                        "arch_scores_", "arch_scores_duration_"
+                    )
+                    if os.path.exists(duration_path):
+                        logger.info(
+                            f"Loading pre-computed duration from {duration_path}"
+                        )
+                        with open(duration_path, "r") as f:
+                            duration_data = json.load(f)
+                        runtime += duration_data.get("duration", 0)
+
+                self.search_trajectory.runtime.append(runtime)
             else:
                 end_time = time.time()
                 # TODO: nasbench101 does not have train_loss, valid_loss, test_loss implemented, so this is a quick fix for now

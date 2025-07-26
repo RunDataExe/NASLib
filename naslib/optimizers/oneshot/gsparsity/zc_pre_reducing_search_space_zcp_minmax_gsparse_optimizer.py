@@ -9,7 +9,7 @@ import torch.nn.utils.parametrize as P
 import torch
 from collections.abc import Iterable
 from naslib.utils import SimpleStateDict
-
+import json
 from naslib.search_spaces.core.primitives import MixedOp
 from naslib.optimizers.core.metaclasses import MetaOptimizer
 from naslib.utils import count_parameters_in_MB
@@ -172,6 +172,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         # Add betas for pruning
         add_betas_to_edges(self.graph, scope=scope)
         logger.info("Added beta parameters to search space edges.")
+
         if resume_from_path and os.path.exists(resume_from_path):
             checkpoint = torch.load(resume_from_path, map_location="cpu")
             logger.info(f"Checkpoint keys: {list(checkpoint.keys())}")
@@ -191,9 +192,92 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     remove_architecture(
                         self.graph, op_indices, representation_type="op_indices"
                     )
+
+        elif getattr(self.config.search, "pre_computed_zc_scores") and os.path.exists(
+            (
+                getattr(self.config.search, "pre_computed_zc_scores")
+                + "_"
+                + self.config.dataset
+                + ".json"
+            )
+        ):
+            pre_computed_zc_scores_path = (
+                getattr(self.config.search, "pre_computed_zc_scores")
+                + "_"
+                + self.config.dataset
+                + ".json"
+            )
+            duration_path = pre_computed_zc_scores_path.replace(
+                "arch_scores_", "arch_scores_duration_"
+            )
+            if os.path.exists(duration_path):
+                logger.info(
+                    f"Loading zero-cost scores from {getattr(self.config.search, 'pre_computed_zc_scores')}"
+                )
+                with open(pre_computed_zc_scores_path, "r") as f:
+                    scores = json.load(f)
+
+                # Build score arrays and map by tuple(op_indices)
+                op_to_score = {
+                    tuple(entry["op_indices"]): {
+                        "jacov": entry["jacov"],
+                        "synflow": entry["synflow"],
+                        "params": entry["params"],
+                    }
+                    for entry in scores
+                }
+
+                jacov_scores = []
+                synflow_scores = []
+                param_scores = []
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                arch_tuples = [tuple(op) for op in arch_list]
+
+                # Rebuild score lists in same order as current arch_list
+                for arch in arch_tuples:
+                    score = op_to_score[arch]
+                    jacov_scores.append(score["jacov"])
+                    synflow_scores.append(score["synflow"])
+                    param_scores.append(score["params"])
+
+                jacov_scores = np.array(jacov_scores)
+                synflow_scores = np.array(synflow_scores)
+                param_scores = np.array(param_scores)
+
+                # Get indices of worst for each metric
+                worst_jacov = np.argsort(jacov_scores)[:1500]
+                worst_synflow = np.argsort(synflow_scores)[:1500]
+                worst_params = np.argsort(param_scores)[:1500]
+
+                # Log the results
+                logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
+                logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
+                logger.info(f"Worst 1500 indices (params): {worst_params}")
+
+                # Find common worst indices across all three metrics
+                worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
+                logger.info(f"Common worst indices: {sorted(worst_set)}")
+
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
+
+                for idx in worst_set:
+                    logger.info(
+                        f"Removing architecture idx={idx}, op_indices={arch_list[idx]}"
+                    )
+                    remove_architecture(
+                        self.graph, arch_list[idx], representation_type="op_indices"
+                    )
+                logger.info(
+                    f"Removed {len(worst_set)} architectures from the search space."
+                )
         else:
             logger.info(
-                "No resume path provided or path does not exist. Starting architecture removal process with full search space."
+                "No resume path nor pre-computed zero-cost scores provided or paths do not exist. Starting architecture removal process with full search space."
             )
 
             # Enumerate all architectures (NASBench201 is small enough)
@@ -234,12 +318,12 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             logger.info("Finished scoring all architectures.")
 
             # Get indices of worst 100 for each metric
-            worst_jacov = np.argsort(jacov_scores)[:100]
-            worst_synflow = np.argsort(synflow_scores)[:100]
-            worst_params = np.argsort(param_scores)[:100]
-            logger.info(f"Worst 100 indices (jacov): {worst_jacov}")
-            logger.info(f"Worst 100 indices (synflow): {worst_synflow}")
-            logger.info(f"Worst 100 indices (params): {worst_params}")
+            worst_jacov = np.argsort(jacov_scores)[:1500]
+            worst_synflow = np.argsort(synflow_scores)[:1500]
+            worst_params = np.argsort(param_scores)[:1500]
+            logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
+            logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
+            logger.info(f"Worst 1500 indices (params): {worst_params}")
 
             worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
 
@@ -497,46 +581,51 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             max(raw_zero_cost_proxy_scores),
         )
 
-        if self.zcp_method == "synflow" or self.zcp_method == "params":
+        if self.zcp_method == "params":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
                 Normalize using log transformed min-max normalization.
                 """
+                if max == min:
+                    return 1
+
                 log_score = np.log(raw_score + 0.000000001)
                 min_log = np.log(min + 0.000000001)
                 max_log = np.log(max + 0.000000001)
                 return (log_score - min_log) / (max_log - min_log)
 
-        # elif self.zcp_method == "synflow":
+        elif self.zcp_method == "synflow":
 
-        #     def normalize(raw_score, min=min_zcp, max=max_zcp):
-        #         """
-        #         Normalize using shifted log transformed min-max normalization.
-        #         """
-        #         # if min == 0:
-        #         #     min = 0
-        #         # else:
-        #         #     min = math.log(min) if min > 0 else -math.log(-min)
+            def normalize(raw_score, min=min_zcp, max=max_zcp):
+                """
+                Normalize using shifted log transformed min-max normalization.
+                """
+                # if min == 0:
+                #     min = 0
+                # else:
+                #     min = math.log(min) if min > 0 else -math.log(-min)
 
-        #         # if max == 0:
-        #         #     max = 0
-        #         # else:
-        #         #     max = math.log(max) if max > 0 else -math.log(-max)
+                # if max == 0:
+                #     max = 0
+                # else:
+                #     max = math.log(max) if max > 0 else -math.log(-max)
 
-        #         # if raw_score == 0:
-        #         #     raw_score = 0
-        #         # else:
-        #         #     raw_score = (
-        #         #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
-        #         #     )
+                # if raw_score == 0:
+                #     raw_score = 0
+                # else:
+                #     raw_score = (
+                #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
+                #     )
+                if max == min:
+                    return 1
 
-        #         shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
-        #         shifted_min_log = np.log(min + abs(min) + 0.000000001)
-        #         shifted_max_log = np.log((max + abs(min) + 0.000000001))
-        #         return (shifted_log_score - shifted_min_log) / (
-        #             shifted_max_log - shifted_min_log
-        #         )
+                shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
+                shifted_min_log = np.log(min + abs(min) + 0.000000001)
+                shifted_max_log = np.log((max + abs(min) + 0.000000001))
+                return (shifted_log_score - shifted_min_log) / (
+                    shifted_max_log - shifted_min_log
+                )
 
         else:
 
@@ -544,6 +633,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 Normalize using min-max normalization.
                 """
+                if max == min:
+                    return 1
+
                 return (raw_score - min) / (max - min)
 
         def normalize_zero_cost_proxy_score(edge):
@@ -811,46 +903,51 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             max(raw_zero_cost_proxy_scores),
         )
 
-        if self.zcp_method == "synflow" or self.zcp_method == "params":
+        if self.zcp_method == "params":
 
             def normalize(raw_score, min=min_zcp, max=max_zcp):
                 """
                 Normalize using log transformed min-max normalization.
                 """
+                if max == min:
+                    return 1
+
                 log_score = np.log(raw_score + 0.000000001)
                 min_log = np.log(min + 0.000000001)
                 max_log = np.log(max + 0.000000001)
                 return (log_score - min_log) / (max_log - min_log)
 
-        # elif self.zcp_method == "synflow":
+        elif self.zcp_method == "synflow":
 
-        #     def normalize(raw_score, min=min_zcp, max=max_zcp):
-        #         """
-        #         Normalize using shifted log transformed min-max normalization.
-        #         """
-        #         # if min == 0:
-        #         #     min = 0
-        #         # else:
-        #         #     min = math.log(min) if min > 0 else -math.log(-min)
+            def normalize(raw_score, min=min_zcp, max=max_zcp):
+                """
+                Normalize using shifted log transformed min-max normalization.
+                """
+                # if min == 0:
+                #     min = 0
+                # else:
+                #     min = math.log(min) if min > 0 else -math.log(-min)
 
-        #         # if max == 0:
-        #         #     max = 0
-        #         # else:
-        #         #     max = math.log(max) if max > 0 else -math.log(-max)
+                # if max == 0:
+                #     max = 0
+                # else:
+                #     max = math.log(max) if max > 0 else -math.log(-max)
 
-        #         # if raw_score == 0:
-        #         #     raw_score = 0
-        #         # else:
-        #         #     raw_score = (
-        #         #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
-        #         #     )
+                # if raw_score == 0:
+                #     raw_score = 0
+                # else:
+                #     raw_score = (
+                #         math.exp(raw_score) if raw_score > 0 else -math.exp(-raw_score)
+                #     )
+                if max == min:
+                    return 1
 
-        #         shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
-        #         shifted_min_log = np.log(min + abs(min) + 0.000000001)
-        #         shifted_max_log = np.log((max + abs(min) + 0.000000001))
-        #         return (shifted_log_score - shifted_min_log) / (
-        #             shifted_max_log - shifted_min_log
-        #         )
+                shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
+                shifted_min_log = np.log(min + abs(min) + 0.000000001)
+                shifted_max_log = np.log((max + abs(min) + 0.000000001))
+                return (shifted_log_score - shifted_min_log) / (
+                    shifted_max_log - shifted_min_log
+                )
 
         else:
 
@@ -858,6 +955,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 Normalize using min-max normalization.
                 """
+                if max == min:
+                    return 1
+
                 return (raw_score - min) / (max - min)
 
         def normalize_zero_cost_proxy_score(edge):

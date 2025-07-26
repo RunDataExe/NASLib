@@ -8,6 +8,7 @@ from naslib.search_spaces.nasbench201.graph import NasBench201SearchSpace
 import os
 from naslib.utils import get_project_root, get_train_val_loaders
 import time
+import numpy as np
 
 
 def score_and_save_architectures(graph, train_loader, device, save_path):
@@ -46,7 +47,7 @@ def score_and_save_architectures(graph, train_loader, device, save_path):
     duration = time.time() - start_time
     # save time into json
 
-    duration_save = save_path.replace(".json", "_duration.json")
+    duration_save = save_path.replace("arch_scores_", "arch_scores_duration_")
 
     with open(duration_save, "w") as f:
         json.dump({"duration": duration}, f)
@@ -65,12 +66,22 @@ def main():
         required=True,
         help="Dataset (e.g., cifar10, cifar100, ImageNet16-120)",
     )
+
     args = parser.parse_args()
+    seed = 1544457859
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
     config = {
         "data": str(get_project_root()) + "/data",
         "dataset": args.dataset,
-        "search": {"seed": 1544457859, "batch_size": 256, "train_portion": 0.8},
+        "search": {
+            "seed": seed,
+            "batch_size": 256,
+            "train_portion": 0.8,
+            "cutout": False,
+        },
     }
     config = CfgNode.load_cfg(json.dumps(config))
 
@@ -83,7 +94,6 @@ def main():
 
     scores = score_and_save_architectures(graph, train_loader, device, save_path)
     print(f"Scored {len(scores)} architectures and saved to {save_path}")
-    print(f"Duration: {scores[0]['duration']} seconds")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ import torch.nn.utils.parametrize as P
 import torch
 from collections.abc import Iterable
 from naslib.utils import SimpleStateDict
-
+import json
 from naslib.search_spaces.core.primitives import MixedOp
 from naslib.optimizers.core.metaclasses import MetaOptimizer
 from naslib.utils import count_parameters_in_MB
@@ -157,7 +157,12 @@ class GSparseOptimizer(MetaOptimizer):
                 edge.data.op[i].register_parameter("weight", weight)
 
     def adapt_search_space(
-        self, search_space, train_loader, scope=None, resume_from_path=None, **kwargs
+        self,
+        search_space,
+        train_loader,
+        scope=None,
+        resume_from_path=None,
+        **kwargs,
     ):
         """
         Modify the search space to fit the optimizer's needs,
@@ -183,6 +188,7 @@ class GSparseOptimizer(MetaOptimizer):
         # Add betas for pruning
         add_betas_to_edges(self.graph, scope=scope)
         logger.info("Added beta parameters to search space edges.")
+
         if resume_from_path and os.path.exists(resume_from_path):
             checkpoint = torch.load(resume_from_path, map_location="cpu")
             logger.info(f"Checkpoint keys: {list(checkpoint.keys())}")
@@ -202,9 +208,99 @@ class GSparseOptimizer(MetaOptimizer):
                     remove_architecture(
                         self.graph, op_indices, representation_type="op_indices"
                     )
+
+        elif getattr(self.config.search, "pre_computed_zc_scores") and os.path.exists(
+            (
+                getattr(self.config.search, "pre_computed_zc_scores")
+                + "_"
+                + self.config.dataset
+                + ".json"
+            )
+        ):
+            pre_computed_zc_scores_path = (
+                getattr(self.config.search, "pre_computed_zc_scores")
+                + "_"
+                + self.config.dataset
+                + ".json"
+            )
+            duration_path = pre_computed_zc_scores_path.replace(
+                "arch_scores_", "arch_scores_duration_"
+            )
+            if os.path.exists(duration_path):
+                logger.info(
+                    f"Loading zero-cost scores from {getattr(self.config.search, 'pre_computed_zc_scores')}"
+                )
+                with open(pre_computed_zc_scores_path, "r") as f:
+                    scores = json.load(f)
+
+                # Build score arrays and map by tuple(op_indices)
+                op_to_score = {
+                    tuple(entry["op_indices"]): {
+                        "jacov": entry["jacov"],
+                        "synflow": entry["synflow"],
+                        "params": entry["params"],
+                    }
+                    for entry in scores
+                }
+
+                jacov_scores = []
+                synflow_scores = []
+                param_scores = []
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                arch_tuples = [tuple(op) for op in arch_list]
+
+                # Rebuild score lists in same order as current arch_list
+                for arch in arch_tuples:
+                    score = op_to_score[arch]
+                    jacov_scores.append(score["jacov"])
+                    synflow_scores.append(score["synflow"])
+                    param_scores.append(score["params"])
+
+                jacov_scores = np.array(jacov_scores)
+                synflow_scores = np.array(synflow_scores)
+                param_scores = np.array(param_scores)
+
+                # Get indices of worst for each metric
+                worst_jacov = np.argsort(jacov_scores)[:1000]
+                worst_synflow = np.argsort(synflow_scores)[:1000]
+                worst_params = np.argsort(param_scores)[:1000]
+
+                # Log the results
+                logger.info(f"Worst 1000 indices (jacov): {worst_jacov}")
+                logger.info(f"Worst 1000 indices (synflow): {worst_synflow}")
+                logger.info(f"Worst 1000 indices (params): {worst_params}")
+
+                # Find common worst indices across all three metrics
+                worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
+                logger.info(f"Common worst indices: {sorted(worst_set)}")
+
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
+                print(
+                    "Iterator before removal:",
+                    len(list(self.graph.get_arch_iterator())),
+                )
+
+                for idx in worst_set:
+                    logger.info(
+                        f"Removing architecture idx={idx}, op_indices={arch_list[idx]}"
+                    )
+                    remove_architecture(
+                        self.graph, arch_list[idx], representation_type="op_indices"
+                    )
+                logger.info(
+                    f"Removed {len(worst_set)} architectures from the search space."
+                )
+                print(
+                    "Iterator after removal:", len(list(self.graph.get_arch_iterator()))
+                )
         else:
             logger.info(
-                "No resume path provided or path does not exist. Starting architecture removal process with full search space."
+                "No resume path nor pre-computed zero-cost scores provided or paths do not exist. Starting architecture removal process with full search space."
             )
 
             # Enumerate all architectures (NASBench201 is small enough)
@@ -213,10 +309,10 @@ class GSparseOptimizer(MetaOptimizer):
             ]
             logger.info(f"Enumerating {len(arch_list)} architectures (full space).")
 
-            import random  # <-- Add this import if not already present
+            # import random  # <-- Add this import if not already present
 
-            if len(arch_list) > 10:
-                arch_list = random.sample(arch_list, 10)
+            # if len(arch_list) > 10:
+            #     arch_list = random.sample(arch_list, 10)
 
             jacov_pred = ZeroCost(method_type="jacov")
             synflow_pred = ZeroCost(method_type="synflow")
@@ -245,12 +341,12 @@ class GSparseOptimizer(MetaOptimizer):
             logger.info("Finished scoring all architectures.")
 
             # Get indices of worst 100 for each metric
-            worst_jacov = np.argsort(jacov_scores)[:100]
-            worst_synflow = np.argsort(synflow_scores)[:100]
-            worst_params = np.argsort(param_scores)[:100]
-            logger.info(f"Worst 100 indices (jacov): {worst_jacov}")
-            logger.info(f"Worst 100 indices (synflow): {worst_synflow}")
-            logger.info(f"Worst 100 indices (params): {worst_params}")
+            worst_jacov = np.argsort(jacov_scores)[:1000]
+            worst_synflow = np.argsort(synflow_scores)[:1000]
+            worst_params = np.argsort(param_scores)[:1000]
+            logger.info(f"Worst 1000 indices (jacov): {worst_jacov}")
+            logger.info(f"Worst 1000 indices (synflow): {worst_synflow}")
+            logger.info(f"Worst 1000 indices (params): {worst_params}")
 
             worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
 

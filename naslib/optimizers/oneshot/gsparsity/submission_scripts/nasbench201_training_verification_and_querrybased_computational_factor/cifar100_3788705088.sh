@@ -14,7 +14,7 @@
 # Ensure the output directory for SLURM logs exists
 mkdir -p naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor/cifar100
 
-python naslib/utils/computational_factor.py \
+python naslib/utils/computational_factor_nasbench201_querry_archs_vs_selftraining.py \
     --dataset cifar100 \
     --num_archs 1 \
     --epochs 200 \

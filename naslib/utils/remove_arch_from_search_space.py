@@ -98,46 +98,21 @@ def _mark_architecture_betas_on_graph(
             )
         arch_op_names_on_edges[edge_tuple_in_cell] = OP_NAMES[op_idx_in_arch]
 
-    def _mark_beta_on_edge_nb201(
-        edge,  # edge is an AttrDict (EdgeAttributes)
-    ):
+    def _mark_beta_on_edge_nb201(edge):
         edge_data = edge.data
-        # In NB201, edges to be modified are within 'cell' subgraphs.
-        # edge.head and edge.tail are node indices in the current graph (which should be a cell).
-        current_edge_tuple_in_cell = (
-            edge.head,
-            edge.tail,
-        )  # Use edge.head and edge.tail
-
-        if (
-            current_edge_tuple_in_cell in arch_op_names_on_edges
-        ):  # Is this one of the 6 configurable cell edges?
+        current_edge_tuple_in_cell = (edge.head, edge.tail)
+        if current_edge_tuple_in_cell in arch_op_names_on_edges:
             if (
                 edge_data.has("beta")
                 and edge_data.has("op")
                 and isinstance(edge_data.op, list)
             ):
                 target_op_name = arch_op_names_on_edges[current_edge_tuple_in_cell]
-
-                try:
-                    # For NB201, the order of ops in edge_data.op (from _set_ops in nasbench201/graph.py)
-                    # is assumed to match OP_NAMES.
-                    op_idx_to_mark = OP_NAMES.index(target_op_name)
-
-                    if 0 <= op_idx_to_mark < len(edge_data.op) and op_idx_to_mark < len(
-                        edge_data.beta
-                    ):
-                        edge_data.beta[op_idx_to_mark] = 1
-                    # else:
-                    # Optional: print warning if index is out of bounds
-                    # print(f"Debug: Index {op_idx_to_mark} for op {target_op_name} on edge {current_edge_tuple_in_cell} out of bounds for ops/betas.")
-                except ValueError:
-                    # Optional: print warning if op name not in OP_NAMES (should not happen if data is consistent)
-                    # print(f"Debug: Target op name '{target_op_name}' for edge {current_edge_tuple_in_cell} not in OP_NAMES list.")
-                    pass
-            # else:
-            # Optional: print warning if edge should be marked but has no beta/op list
-            # print(f"Debug: Edge {current_edge_tuple_in_cell} to be marked, but no beta/op list or not a list on edge data.")
+                # Find the op by name in the current ops list
+                for i, op in enumerate(edge_data.op):
+                    if op.get_op_name == target_op_name:
+                        edge_data.beta[i] = 1
+                        break
 
     # graph.update_edges will apply this to edges of cell subgraphs if scope is correct
     graph.update_edges(

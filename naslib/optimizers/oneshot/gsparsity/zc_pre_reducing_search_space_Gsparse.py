@@ -31,28 +31,6 @@ from naslib.search_spaces.nasbench201.graph import NasBench201SearchSpace
 logger = logging.getLogger(__name__)
 
 
-def sample_all_architectures(search_space, max_samples=None):
-    """
-    Enumerate all architectures (or sample up to max_samples if set).
-    Returns a list of op_indices.
-    """
-    logger = logging.getLogger(__name__)
-    arch_iter = search_space.get_arch_iterator()
-    if max_samples:
-        arch_list = []
-        for i in range(max_samples):
-            search_space.sample_random_architecture()
-            op_indices = list(search_space.get_op_indices())
-            arch_list.append(op_indices)
-            logger.debug(f"Sampled architecture {i}: {op_indices}")
-        logger.info(f"Sampled {len(arch_list)} architectures (random subset).")
-        return arch_list
-    else:
-        arch_list = [list(op_indices) for op_indices in arch_iter]
-        logger.info(f"Enumerated {len(arch_list)} architectures (full space).")
-        return arch_list
-
-
 class GSparseOptimizer(MetaOptimizer):
     """
     Implements Group Sparsity as defined in
@@ -263,14 +241,14 @@ class GSparseOptimizer(MetaOptimizer):
                 param_scores = np.array(param_scores)
 
                 # Get indices of worst for each metric
-                worst_jacov = np.argsort(jacov_scores)[:1000]
-                worst_synflow = np.argsort(synflow_scores)[:1000]
-                worst_params = np.argsort(param_scores)[:1000]
+                worst_jacov = np.argsort(jacov_scores)[:1500]
+                worst_synflow = np.argsort(synflow_scores)[:1500]
+                worst_params = np.argsort(param_scores)[:1500]
 
                 # Log the results
-                logger.info(f"Worst 1000 indices (jacov): {worst_jacov}")
-                logger.info(f"Worst 1000 indices (synflow): {worst_synflow}")
-                logger.info(f"Worst 1000 indices (params): {worst_params}")
+                logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
+                logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
+                logger.info(f"Worst 1500 indices (params): {worst_params}")
 
                 # Find common worst indices across all three metrics
                 worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
@@ -341,12 +319,12 @@ class GSparseOptimizer(MetaOptimizer):
             logger.info("Finished scoring all architectures.")
 
             # Get indices of worst 100 for each metric
-            worst_jacov = np.argsort(jacov_scores)[:1000]
-            worst_synflow = np.argsort(synflow_scores)[:1000]
-            worst_params = np.argsort(param_scores)[:1000]
-            logger.info(f"Worst 1000 indices (jacov): {worst_jacov}")
-            logger.info(f"Worst 1000 indices (synflow): {worst_synflow}")
-            logger.info(f"Worst 1000 indices (params): {worst_params}")
+            worst_jacov = np.argsort(jacov_scores)[:1500]
+            worst_synflow = np.argsort(synflow_scores)[:1500]
+            worst_params = np.argsort(param_scores)[:1500]
+            logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
+            logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
+            logger.info(f"Worst 1500 indices (params): {worst_params}")
 
             worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
 

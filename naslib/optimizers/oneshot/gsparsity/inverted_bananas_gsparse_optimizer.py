@@ -46,6 +46,9 @@ class Inverted_Bananas_GsparseOptimizer(MetaOptimizer):
             "Not sure if the resumption of the list of architectures that should be removed works, when resuming from the first stage. If this is needed verify first."
         )
         logger.info(
+            "Not sure if the removal of the archs is shifting the indices of the architectures in the search space, if this is needed verify first."
+        )
+        logger.info(
             f"Stage 1 (Inverted BANANAS) will run for {self.stage1_epochs} epochs."
         )
         logger.info(

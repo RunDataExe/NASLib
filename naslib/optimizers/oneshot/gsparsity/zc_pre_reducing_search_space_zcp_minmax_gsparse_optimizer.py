@@ -590,6 +590,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 if max == min:
                     return 1
 
+                if raw_score == min:
+                    return 0
+
                 log_score = np.log(raw_score + 0.000000001)
                 min_log = np.log(min + 0.000000001)
                 max_log = np.log(max + 0.000000001)
@@ -620,6 +623,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 if max == min:
                     return 1
 
+                if raw_score == min:
+                    return 0
+
                 shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
                 shifted_min_log = np.log(min + abs(min) + 0.000000001)
                 shifted_max_log = np.log((max + abs(min) + 0.000000001))
@@ -635,6 +641,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 if max == min:
                     return 1
+
+                if raw_score == min:
+                    return 0
 
                 return (raw_score - min) / (max - min)
 
@@ -912,6 +921,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 if max == min:
                     return 1
 
+                if raw_score == min:
+                    return 0
+
                 log_score = np.log(raw_score + 0.000000001)
                 min_log = np.log(min + 0.000000001)
                 max_log = np.log(max + 0.000000001)
@@ -942,6 +954,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 if max == min:
                     return 1
 
+                if raw_score == min:
+                    return 0
+
                 shifted_log_score = np.log(raw_score + abs(min) + 0.000000001)
                 shifted_min_log = np.log(min + abs(min) + 0.000000001)
                 shifted_max_log = np.log((max + abs(min) + 0.000000001))
@@ -957,6 +972,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 """
                 if max == min:
                     return 1
+
+                if raw_score == min:
+                    return 0
 
                 return (raw_score - min) / (max - min)
 

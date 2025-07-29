@@ -241,14 +241,14 @@ class GSparseOptimizer(MetaOptimizer):
                 param_scores = np.array(param_scores)
 
                 # Get indices of worst for each metric
-                worst_jacov = np.argsort(jacov_scores)[:1500]
-                worst_synflow = np.argsort(synflow_scores)[:1500]
-                worst_params = np.argsort(param_scores)[:1500]
+                worst_jacov = np.argsort(jacov_scores)[:750]
+                worst_synflow = np.argsort(synflow_scores)[:750]
+                worst_params = np.argsort(param_scores)[:750]
 
                 # Log the results
-                logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
-                logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
-                logger.info(f"Worst 1500 indices (params): {worst_params}")
+                logger.info(f"Worst 750 indices (jacov): {worst_jacov}")
+                logger.info(f"Worst 750 indices (synflow): {worst_synflow}")
+                logger.info(f"Worst 750 indices (params): {worst_params}")
 
                 # Find common worst indices across all three metrics
                 worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
@@ -319,12 +319,12 @@ class GSparseOptimizer(MetaOptimizer):
             logger.info("Finished scoring all architectures.")
 
             # Get indices of worst 100 for each metric
-            worst_jacov = np.argsort(jacov_scores)[:1500]
-            worst_synflow = np.argsort(synflow_scores)[:1500]
-            worst_params = np.argsort(param_scores)[:1500]
-            logger.info(f"Worst 1500 indices (jacov): {worst_jacov}")
-            logger.info(f"Worst 1500 indices (synflow): {worst_synflow}")
-            logger.info(f"Worst 1500 indices (params): {worst_params}")
+            worst_jacov = np.argsort(jacov_scores)[:750]
+            worst_synflow = np.argsort(synflow_scores)[:750]
+            worst_params = np.argsort(param_scores)[:750]
+            logger.info(f"Worst 750 indices (jacov): {worst_jacov}")
+            logger.info(f"Worst 750 indices (synflow): {worst_synflow}")
+            logger.info(f"Worst 750 indices (params): {worst_params}")
 
             worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
 

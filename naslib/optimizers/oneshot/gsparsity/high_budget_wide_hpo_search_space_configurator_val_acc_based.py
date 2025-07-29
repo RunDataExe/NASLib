@@ -173,7 +173,7 @@ from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gspa
 )
 
 from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_Gsparse import (
-    GSparseOptimizer as PreZCPGSparseOptimizer,
+    GSparseOptimizer as PreZCPGSParseOptimizer,
 )
 from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_zcp_minmax_gsparse_optimizer import (
     ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
@@ -234,7 +234,10 @@ parser.add_argument(
     "--eval_epochs", type=int, default=600, help="Number of evaluation epochs"
 )
 parser.add_argument(
-    "--hpo_timeout", type=int, default=600, help="Timeout in seconds for the HPO study."
+    "--hpo_timeout",
+    type=int,
+    default=None,
+    help="Timeout in seconds for the HPO study.",
 )
 parser.add_argument(
     "--resume",
@@ -785,6 +788,8 @@ def objective(trial):
         "zcp_gsparsity",
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",
+        "zcp-pre_gsparsity",
+        "zcp-pre_zcp_gsparsity",
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
@@ -913,17 +918,19 @@ def objective(trial):
     # --- Handle resuming by copying files from the failed/interrupted trial ---
     original_trial_number = trial.user_attrs.get("original_trial_number")
     if original_trial_number is not None:
-        # Define source path from the original trial
-        source_trial_path = os.path.join(
+        # Build source path with zcp_method if needed
+        source_dir_parts = [
             out_dir,
             "WHPO",
             optimizer_type,
             search_space_type,
             dataset,
             str(seed),
-            f"trial_{original_trial_number}",
-        )
-        # Destination path is the current trial's save directory
+        ]
+        if "zcp_" in optimizer_type:
+            source_dir_parts.append(zcp_method)
+        source_dir_parts.append(f"trial_{original_trial_number}")
+        source_trial_path = os.path.join(*source_dir_parts)
         dest_trial_path = config.save
 
         if os.path.isdir(source_trial_path):
@@ -1067,8 +1074,11 @@ def update_config(
         search_space_type,
         dataset,
         str(seed),
-        f"trial_{trial.number}",
     )
+    # Add zcp_method to path for ZCP optimizers
+    if "zcp_" in optimizer_type:
+        config.save = os.path.join(config.save, zcp_method)
+    config.save = os.path.join(config.save, f"trial_{trial.number}")
 
     # This logic is now handled by copying files in the objective function.
     # config.resume_from_path is no longer needed.
@@ -1214,7 +1224,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
         optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
     elif optimizer_type == "zcp-pre_gsparsity":
-        optimizer = PreZCPGSparseOptimizer(config)
+        optimizer = PreZCPGSParseOptimizer(config)
     elif optimizer_type == "zcp-pre_zcp_gsparsity":
         optimizer = PreZCPZCPGSparseOptimizer(config)
     else:
@@ -1260,7 +1270,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     ]:
         # For two-stage optimizers
         train_loader = None
-        if "zcp" in optimizer_type:
+        if "zcp_" in optimizer_type:
             train_loader, _, _, _, _ = get_train_val_loaders(
                 config, train_workers=0, val_workers=0
             )
@@ -1363,7 +1373,7 @@ def main():
 
     # Construct a unique study name and database file path
     study_name_parts = [optimizer_type, search_space_type, dataset, str(seed)]
-    if "zcp" in optimizer_type:
+    if "zcp_" in optimizer_type:
         study_name_parts.append(zcp_method)
 
     study_name = "-".join(study_name_parts)
@@ -1388,57 +1398,57 @@ def main():
     except Exception as e:
         print(f"An exception occurred during the study: {e}")
 
-    # --- Hyperparameter Importance Analysis (Post-Run) ---
-    print("\n--- Hyperparameter Importance Analysis ---")
-    try:
-        # By default, get_param_importances only uses successfully completed trials (TrialState.COMPLETE).
-        # This is the correct behavior, as pruned trials do not have a final, comparable objective value.
-        completed_trials = study.get_trials(
-            deepcopy=False, states=[TrialState.COMPLETE]
-        )
-        if len(completed_trials) > 1:
-            param_importances = optuna.importance.get_param_importances(study)
+    # # --- Hyperparameter Importance Analysis (Post-Run) ---
+    # print("\n--- Hyperparameter Importance Analysis ---")
+    # try:
+    #     # By default, get_param_importances only uses successfully completed trials (TrialState.COMPLETE).
+    #     # This is the correct behavior, as pruned trials do not have a final, comparable objective value.
+    #     completed_trials = study.get_trials(
+    #         deepcopy=False, states=[TrialState.COMPLETE]
+    #     )
+    #     if len(completed_trials) > 1:
+    #         param_importances = optuna.importance.get_param_importances(study)
 
-            print("Parameter importances (fANOVA):")
-            sorted_importances = sorted(
-                param_importances.items(), key=lambda x: x[1], reverse=True
-            )
-            for param, importance in sorted_importances:
-                print(f"  {param}: {importance:.4f}")
+    #         print("Parameter importances (fANOVA):")
+    #         sorted_importances = sorted(
+    #             param_importances.items(), key=lambda x: x[1], reverse=True
+    #         )
+    #         for param, importance in sorted_importances:
+    #             print(f"  {param}: {importance:.4f}")
 
-            # Visualize and save the importances plot
-            fig = optuna.visualization.plot_param_importances(study)
-            plot_path = os.path.join(
-                out_dir, f"{optimizer_type}_{dataset}_{seed}_param_importances.html"
-            )
-            fig.write_html(plot_path)
-            print(f"\nSaved parameter importance plot to: {plot_path}")
-        else:
-            print(
-                "Skipping importance analysis: not enough completed trials to analyze."
-            )
+    #         # Visualize and save the importances plot
+    #         fig = optuna.visualization.plot_param_importances(study)
+    #         plot_path = os.path.join(
+    #             out_dir, f"{optimizer_type}_{dataset}_{seed}_param_importances.html"
+    #         )
+    #         fig.write_html(plot_path)
+    #         print(f"\nSaved parameter importance plot to: {plot_path}")
+    #     else:
+    #         print(
+    #             "Skipping importance analysis: not enough completed trials to analyze."
+    #         )
 
-    except Exception as e:
-        print(f"Could not calculate or plot parameter importances: {e}")
-    # --- End of Analysis ---
+    # except Exception as e:
+    #     print(f"Could not calculate or plot parameter importances: {e}")
+    # # --- End of Analysis ---
 
-    # Print results
-    pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
-    complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
+    # # Print results
+    # pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
+    # complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
 
-    print("\nStudy statistics: ")
-    print(f"  Number of finished trials: {len(study.trials)}")
-    print(f"  Number of pruned trials: {len(pruned_trials)}")
-    print(f"  Number of complete trials: {len(complete_trials)}")
+    # print("\nStudy statistics: ")
+    # print(f"  Number of finished trials: {len(study.trials)}")
+    # print(f"  Number of pruned trials: {len(pruned_trials)}")
+    # print(f"  Number of complete trials: {len(complete_trials)}")
 
-    print("Best trial:")
-    trial = study.best_trial
+    # print("Best trial:")
+    # trial = study.best_trial
 
-    print(f"  Value: {trial.value}")
+    # print(f"  Value: {trial.value}")
 
-    print("  Params: ")
-    for key, value in trial.params.items():
-        print(f"    {key}: {value}")
+    # print("  Params: ")
+    # for key, value in trial.params.items():
+    #     print(f"    {key}: {value}")
 
 
 if __name__ == "__main__":

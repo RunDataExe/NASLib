@@ -842,8 +842,8 @@ def objective(trial):
 
     config["search"]["early_stopping"] = {
         "criterion": "valid_loss",  # Can be 'train_acc', 'train_loss', 'valid_acc', 'valid_loss', or 'runtime'
-        "patience": 7,  # Number of epochs to wait for improvement
-        "threshold": 0.0001,  # Minimum change to be considered an improvement
+        "patience": 10,  # Number of epochs to wait for improvement
+        "threshold": 0.00001,  # Minimum change to be considered an improvement
     }
 
     all_trials = trial.study.get_trials(deepcopy=False)

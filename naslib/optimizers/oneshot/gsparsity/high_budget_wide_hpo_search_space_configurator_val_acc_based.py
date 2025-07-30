@@ -460,9 +460,7 @@ def objective(trial):
                 "learning_rate_min": trial.suggest_float(
                     "learning_rate_min", 1e-5, 5e-4, log=True
                 ),
-                "batch_size": trial.suggest_categorical(
-                    "zcp_gsparsitybatch_size", [32, 64, 128]
-                ),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
             },
@@ -493,9 +491,7 @@ def objective(trial):
                 "learning_rate_min": trial.suggest_float(
                     "learning_rate_min", 1e-5, 5e-4, log=True
                 ),
-                "batch_size": trial.suggest_categorical(
-                    "zcp_gsparsitybatch_size", [32, 64, 128]
-                ),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
             },
@@ -526,9 +522,7 @@ def objective(trial):
                 "learning_rate_min": trial.suggest_float(
                     "learning_rate_min", 1e-5, 5e-4, log=True
                 ),
-                "batch_size": trial.suggest_categorical(
-                    "zcp_gsparsitybatch_size", [32, 64, 128]
-                ),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
                 "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
@@ -794,18 +788,23 @@ def objective(trial):
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
         cutout = trial.suggest_categorical("cutout", [False, True])
-        if cutout:
-            config["search"]["cutout"] = True
-            config["search"]["cutout_length"] = trial.suggest_int(
-                "cutout_length", 8, 24
-            )
-            config["search"]["cutout_prob"] = trial.suggest_float(
-                "cutout_prob", 0.1, 1.0
-            )
-        else:
-            config["search"]["cutout"] = False
-            config["search"]["cutout_length"] = 0
-            config["search"]["cutout_prob"] = None
+        config["search"]["cutout"] = cutout
+        config["search"]["cutout_length"] = trial.suggest_int("cutout_length", 8, 24)
+        config["search"]["cutout_prob"] = trial.suggest_float("cutout_prob", 0.1, 1.0)
+
+        # cutout = trial.suggest_categorical("cutout", [False, True])
+        # if cutout:
+        #     config["search"]["cutout"] = True
+        #     config["search"]["cutout_length"] = trial.suggest_int(
+        #         "cutout_length", 8, 24
+        #     )
+        #     config["search"]["cutout_prob"] = trial.suggest_float(
+        #         "cutout_prob", 0.1, 1.0
+        #     )
+        # else:
+        #     config["search"]["cutout"] = False
+        #     config["search"]["cutout_length"] = 0
+        #     config["search"]["cutout_prob"] = None
 
     if optimizer_type in [
         "inverted_bananas_gsparsity",
@@ -813,21 +812,30 @@ def objective(trial):
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
-        acq_fn_optimization = trial.suggest_categorical(
+        config["stage1"]["search"]["acq_fn_optimization"] = trial.suggest_categorical(
             "acq_fn_optimization", ["mutation", "random_sampling"]
         )
-        if acq_fn_optimization == "mutation":
-            config["stage1"]["search"]["acq_fn_optimization"] = "mutation"
-            config["stage1"]["search"]["num_arches_to_mutate"] = trial.suggest_int(
-                "num_arches_to_mutate", 1, 5
-            )
-            config["stage1"]["search"]["max_mutations"] = trial.suggest_int(
-                "max_mutations", 1, 3
-            )
-        else:
-            config["stage1"]["search"]["acq_fn_optimization"] = "random_sampling"
-            config["stage1"]["search"]["num_arches_to_mutate"] = 0
-            config["stage1"]["search"]["max_mutations"] = 0
+        config["stage1"]["search"]["num_arches_to_mutate"] = trial.suggest_int(
+            "num_arches_to_mutate", 1, 5
+        )
+        config["stage1"]["search"]["max_mutations"] = trial.suggest_int(
+            "max_mutations", 1, 3
+        )
+        # acq_fn_optimization = trial.suggest_categorical(
+        #     "acq_fn_optimization", ["mutation", "random_sampling"]
+        # )
+        # if acq_fn_optimization == "mutation":
+        #     config["stage1"]["search"]["acq_fn_optimization"] = "mutation"
+        #     config["stage1"]["search"]["num_arches_to_mutate"] = trial.suggest_int(
+        #         "num_arches_to_mutate", 1, 5
+        #     )
+        #     config["stage1"]["search"]["max_mutations"] = trial.suggest_int(
+        #         "max_mutations", 1, 3
+        #     )
+        # else:
+        #     config["stage1"]["search"]["acq_fn_optimization"] = "random_sampling"
+        #     config["stage1"]["search"]["num_arches_to_mutate"] = 0
+        #     config["stage1"]["search"]["max_mutations"] = 0
 
     # Add common evaluation config
     config["evaluation"] = evaluation

@@ -856,19 +856,29 @@ def objective(trial):
         f"Number of completed/pruned trials: {len(hashed_pruned_or_completed_trials)}"
     )
 
-    failed_trials = [t for t in all_trials if t.state == TrialState.FAIL]
-    logging.debug(f"Number of failed trials: {len(failed_trials)}")
-    last_failed = max(failed_trials, key=lambda t: t.number) if failed_trials else None
-    hashed_last_failed = trial_hash(last_failed.params) if last_failed else None
+    interrupted_trials = [
+        t
+        for t in all_trials
+        if t.number != trial.number and t.state in [TrialState.FAIL, TrialState.RUNNING]
+    ]
     logging.debug(
-        f"Last failed trial hash: {hashed_last_failed}"
-        if hashed_last_failed
-        else "No failed trials."
+        f"Number of interrupted (failed or running) trials: {len(interrupted_trials)}"
+    )
+    last_interrupted = (
+        max(interrupted_trials, key=lambda t: t.number) if interrupted_trials else None
+    )
+    hashed_last_interrupted = (
+        trial_hash(last_interrupted.params) if last_interrupted else None
     )
     logging.debug(
-        f"Last failed trial number: {last_failed.number}"
-        if last_failed
-        else "No failed trials."
+        f"Last interrupted trial hash: {hashed_last_interrupted}"
+        if hashed_last_interrupted
+        else "No interrupted trials."
+    )
+    logging.debug(
+        f"Last interrupted trial number: {last_interrupted.number}"
+        if last_interrupted
+        else "No interrupted trials."
     )
     logging.debug(f"Current trial number: {trial.number}")
 
@@ -877,14 +887,14 @@ def objective(trial):
     logging.debug(
         f"All pruned/completed trial hashes: {hashed_pruned_or_completed_trials}"
     )
-    logging.debug(f"Last failed trial hash: {hashed_last_failed}")
+    logging.debug(f"Last interrupted trial hash: {hashed_last_interrupted}")
     # Skip if trial already completed/pruned
     if current_hash in hashed_pruned_or_completed_trials:
         raise optuna.TrialPruned()
 
-    # If there was a failed trial, only resume it (prune others directly)
-    if current_hash == hashed_last_failed:
-        trial.set_user_attr("original_trial_number", last_failed.number)
+    # If there was an interrupted trial, only resume it (prune others directly)
+    if current_hash == hashed_last_interrupted:
+        trial.set_user_attr("original_trial_number", last_interrupted.number)
 
     # logging.debug(
     #         "Comparing all trials to find duplicates or similar configurations..."

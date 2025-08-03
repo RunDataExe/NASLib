@@ -9,6 +9,10 @@ import torchvision.transforms as transforms
 from .taskonomy_dataset import get_datasets
 from . import load_ops
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class WorkerInitializer:
     """
@@ -24,6 +28,7 @@ class WorkerInitializer:
         # The +1 for the train_queue is to have different seeds for train and val/test.
         worker_seed = self.seed + worker_id + (1 if self.is_train else 0)
         np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
 
 
 def get_project_root() -> Path:
@@ -48,6 +53,7 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
         if hasattr(config, "train_portion")
         else config.search.train_portion
     )
+    dataset_subset = config.dataset_subset if hasattr(config, "dataset_subset") else 1.0
     config = config.search if mode == "train" else config.evaluation
     if dataset == "cifar10":
         train_transform, valid_transform = _data_transforms_cifar10(config)
@@ -191,11 +197,23 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
 
     num_train = len(train_data)
     indices = list(range(num_train))
+
+    if dataset_subset < 1.0:
+        subset_size = int(np.floor(dataset_subset * num_train))
+        logger.info(
+            f"Using {subset_size} out of {num_train} training samples for dataset subset {dataset_subset}"
+        )
+        np.random.shuffle(indices)
+        indices = indices[:subset_size]
+        num_train = len(indices)
+
     split = int(np.floor(train_portion * num_train))
 
     train_init_fn = WorkerInitializer(seed, is_train=True)
     val_test_init_fn = WorkerInitializer(seed, is_train=False)
 
+    g = torch.Generator()
+    g.manual_seed(seed)
     train_queue = torch.utils.data.DataLoader(
         train_data,
         batch_size=batch_size,
@@ -203,6 +221,7 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
         pin_memory=True,
         num_workers=train_workers,
         worker_init_fn=train_init_fn,
+        generator=g,
     )
 
     valid_queue = torch.utils.data.DataLoader(
@@ -212,6 +231,7 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
         pin_memory=True,
         num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
+        generator=g,
     )
 
     test_queue = torch.utils.data.DataLoader(
@@ -221,6 +241,7 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
         pin_memory=True,
         num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
+        generator=g,
     )
     # train_queue = torch.utils.data.DataLoader(
     #     train_data,

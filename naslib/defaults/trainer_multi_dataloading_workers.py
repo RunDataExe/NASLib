@@ -411,10 +411,15 @@ class Trainer(object):
                     logger.info(
                         f"Stopping early at epoch {e} due to no improvement for {self.early_stopping_patience} epochs."
                     )
+                    # Also report to Optuna before breaking, so it has the final value
+                    if trial:
+                        # Use val_loss for early stopping criterion, but report val_top1.avg for the objective
+                        trial.report(self.val_top1.avg, e + 1)
                     break
 
             # Report to Optuna and check for pruning
             if trial:
+                # Report at the end of every epoch. This is crucial for the DEHB pruner.
                 trial.report(
                     self.val_top1.avg, e + 1
                 )  # e + 1 because epochs are 0-indexed

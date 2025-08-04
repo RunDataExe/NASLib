@@ -413,6 +413,8 @@ class Trainer(object):
                     )
                     # Also report to Optuna before breaking, so it has the final value
                     if trial:
+                        # Set a flag to indicate this was an internal early stop
+                        trial.set_user_attr("internal_early_stopped", True)
                         # Use val_loss for early stopping criterion, but report val_top1.avg for the objective
                         trial.report(self.val_top1.avg, e + 1)
                     break

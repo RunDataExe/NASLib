@@ -585,6 +585,8 @@ class Trainer(object):
                     logger.info(
                         f"Stopping early at epoch {e} due to no improvement for {self.early_stopping_patience} epochs."
                     )
+                    if trial:
+                        trial.report(self.val_top1.avg, e + 1)
                     break
 
             # Report to Optuna and check for pruning only in stage 2

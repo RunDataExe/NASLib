@@ -924,23 +924,20 @@ def objective(trial):
 
     # Step 3: Apply the specified reuse/resume logic if matches are found and budget is known.
     if matching_trials and current_budget != -1:
-        # Sort matching trials by their budget in descending order to easily find the highest.
-        matching_trials.sort(key=lambda t: t.user_attrs.get("budget", 0), reverse=True)
-        highest_budget_trial = matching_trials[0]
-        highest_budget = highest_budget_trial.user_attrs.get("budget", 0)
-
-        # Scenario 1: Exact Budget Match.
-        # Find a trial that matches the current budget exactly.
-        exact_match_trial = next(
+        # --- START REVISED LOGIC ---
+        # Priority 1: Find an exact match that is already finished (COMPLETE or PRUNED).
+        # This is the most efficient reuse, as it requires no new computation.
+        finished_exact_match = next(
             (
                 t
                 for t in matching_trials
                 if t.user_attrs.get("budget") == current_budget
+                and t.state in [TrialState.COMPLETE, TrialState.PRUNED]
             ),
             None,
         )
-        if exact_match_trial:
-            # First, update config to get the destination path for copying
+
+        if finished_exact_match:
             temp_config = CfgNode.load_cfg(json.dumps({"search": {}, "evaluation": {}}))
             dest_trial_path = update_config(
                 temp_config,
@@ -952,100 +949,81 @@ def objective(trial):
                 trial,
             ).save
 
-            if exact_match_trial.state == TrialState.COMPLETE:
+            if finished_exact_match.state == TrialState.COMPLETE:
                 logging.info(
-                    f"Trial {trial.number} is an exact match for COMPLETED Trial {exact_match_trial.number} "
-                    f"(budget {current_budget}). Reusing its value: {exact_match_trial.value}."
+                    f"Trial {trial.number} is an exact match for COMPLETED Trial {finished_exact_match.number} "
+                    f"(budget {current_budget}). Reusing its value: {finished_exact_match.value}."
                 )
                 _copy_trial_artifacts(
-                    exact_match_trial.number, dest_trial_path, out_dir
+                    finished_exact_match.number, dest_trial_path, out_dir
                 )
-                # Reporting the value at the specific budget step makes it a valid completed trial for the pruner.
-                trial.report(exact_match_trial.value, current_budget)
-                return exact_match_trial.value  # Reuse result and mark as COMPLETE
+                trial.report(finished_exact_match.value, current_budget)
+                return finished_exact_match.value
 
-            elif exact_match_trial.state == TrialState.PRUNED:
+            elif finished_exact_match.state == TrialState.PRUNED:
                 _copy_trial_artifacts(
-                    exact_match_trial.number, dest_trial_path, out_dir
+                    finished_exact_match.number, dest_trial_path, out_dir
                 )
-                # The trial is a duplicate of a pruned trial. We should report the same
-                # intermediate value that caused the original to be pruned, and then prune this one.
-                last_step = exact_match_trial.last_step
+                last_step = finished_exact_match.last_step
                 if last_step is not None:
-                    last_value = exact_match_trial.intermediate_values[last_step]
+                    last_value = finished_exact_match.intermediate_values[last_step]
                     trial.report(last_value, last_step)
                     logging.info(
-                        f"Trial {trial.number} is an exact match for PRUNED Trial {exact_match_trial.number} "
+                        f"Trial {trial.number} is an exact match for PRUNED Trial {finished_exact_match.number} "
                         f"(budget {current_budget}). Reporting its last value ({last_value} at step {last_step}) and pruning."
                     )
                 else:
                     logging.info(
-                        f"Trial {trial.number} is an exact match for PRUNED Trial {exact_match_trial.number} "
-                        f"(budget {current_budget}), which had no reported values. Pruning immediately."
+                        f"Trial {trial.number} is an exact match for PRUNED Trial {finished_exact_match.number}, which had no reported values. Pruning immediately."
                     )
                 raise optuna.TrialPruned()
 
-        # Scenario 2: Promotion (Current budget is higher than any previous attempt).
-        # This trial should resume from the checkpoint of the highest-budget previous trial.
-        elif current_budget > highest_budget:
-            if highest_budget_trial.user_attrs.get("internal_early_stopped", False):
-                logging.info(
-                    f"Skipping promotion for Trial {trial.number} because its candidate "
-                    f"(Trial {highest_budget_trial.number}) was internally early-stopped. Returning early stopped value {highest_budget_trial.value}."
-                )
-                trial.user_attrs["internal_early_stopped"] = True
-                trial.report(highest_budget_trial.value, current_budget)
-                return highest_budget_trial.value  # Reuse result and mark as COMPLETE
-
-            logging.info(
-                f"Trial {trial.number} (budget {current_budget}) is a promotion from Trial "
-                f"{highest_budget_trial.number} (budget {highest_budget}, state {highest_budget_trial.state})."
+        else:
+            # Priority 2: Handle promotions and resuming failed trials.
+            # This block runs only if no finished exact match was found.
+            matching_trials.sort(
+                key=lambda t: t.user_attrs.get("budget", 0), reverse=True
             )
-            # Whether the previous was COMPLETE or PRUNED, we resume from its state to continue training.
-            resume_from_trial_number = highest_budget_trial.number
-            # Set a specific attribute for promotions. This is NOT a replacement.
-            trial.set_user_attr("promoted_from", resume_from_trial_number)
+            highest_budget_trial = matching_trials[0]
+            highest_budget = highest_budget_trial.user_attrs.get("budget", 0)
 
-        # If neither an exact match nor a promotion, it's a new trial for a specific rung.
-        # The `else` block for redundancy has been removed as it was incorrect for Hyperband.
+            # Scenario 2a: Promotion (Current budget is higher than any previous attempt).
+            if current_budget > highest_budget:
+                if highest_budget_trial.user_attrs.get("internal_early_stopped", False):
+                    logging.info(
+                        f"Skipping promotion for Trial {trial.number} because its candidate "
+                        f"(Trial {highest_budget_trial.number}) was internally early-stopped. Reusing value."
+                    )
+                    trial.user_attrs["internal_early_stopped"] = True
+                    trial.report(highest_budget_trial.value, current_budget)
+                    return highest_budget_trial.value
 
-    # Step 4: Handle resuming the last interrupted (FAIL/RUNNING) trial if no other logic applied.
-    # This is a fallback for crashes.
-    if resume_from_trial_number is None:
-        interrupted_trials = [
-            t
-            for t in matching_trials
-            if t.state in [TrialState.FAIL, TrialState.RUNNING]
-        ]
-        if interrupted_trials:
-            # Find the most recent interrupted trial to consider resuming.
-            last_interrupted = max(interrupted_trials, key=lambda t: t.number)
-            interrupted_budget = last_interrupted.user_attrs.get("budget", 0)
-
-            # CRITICAL CHECK: Before resuming, ensure no completed/pruned trial with a higher budget exists.
-            # If one does, the interrupted trial is obsolete and should not be resumed.
-            has_more_advanced_trial = any(
-                t.state in [TrialState.COMPLETE, TrialState.PRUNED]
-                and t.user_attrs.get("budget", 0) > interrupted_budget
-                for t in matching_trials
-            )
-
-            if not has_more_advanced_trial:
                 logging.info(
-                    f"Trial {trial.number} matches the last interrupted trial (Trial {last_interrupted.number}). "
-                    "Setting up to resume as no more advanced trial exists."
+                    f"Trial {trial.number} (budget {current_budget}) is a promotion from Trial "
+                    f"{highest_budget_trial.number} (budget {highest_budget}, state {highest_budget_trial.state})."
                 )
-                resume_from_trial_number = last_interrupted.number
-                # Set a specific attribute for resuming an interrupted trial. This IS a replacement.
-                trial.set_user_attr(
-                    "resumed_interrupted_from", resume_from_trial_number
-                )
+                resume_from_trial_number = highest_budget_trial.number
+                trial.set_user_attr("promoted_from", resume_from_trial_number)
+
+            # Scenario 2b: Resuming an interrupted trial at the same budget.
+            # This happens if a trial with this budget exists but is in FAIL/RUNNING state.
             else:
-                logging.info(
-                    f"Ignoring interrupted Trial {last_interrupted.number} because a more "
-                    "advanced (higher budget) trial with the same hyperparameters already exists."
-                )
-    # --- End: New Logic ---
+                interrupted_trials = [
+                    t
+                    for t in matching_trials
+                    if t.state in [TrialState.FAIL, TrialState.RUNNING]
+                ]
+                if interrupted_trials:
+                    last_interrupted = max(interrupted_trials, key=lambda t: t.number)
+                    logging.info(
+                        f"Trial {trial.number} matches the last interrupted trial (Trial {last_interrupted.number}). "
+                        "Setting up to resume."
+                    )
+                    resume_from_trial_number = last_interrupted.number
+                    trial.set_user_attr(
+                        "resumed_interrupted_from", resume_from_trial_number
+                    )
+        # --- END REVISED LOGIC ---
 
     # Convert dictionary to CfgNode
     config = CfgNode.load_cfg(json.dumps(config))

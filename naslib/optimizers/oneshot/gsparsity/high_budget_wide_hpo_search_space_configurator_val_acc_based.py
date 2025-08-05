@@ -1029,7 +1029,7 @@ def objective(trial):
     config = CfgNode.load_cfg(json.dumps(config))
 
     # Set the dataset subset percentage for HPO #!
-    config.dataset_subset = 0.001
+    config.dataset_subset = 0.2
 
     # Set epochs for HPO trial.
     if current_budget != -1:
@@ -1044,7 +1044,7 @@ def objective(trial):
             "self_training_inverted_bananas_gsparsity",
             "self_training_inverted_bananas_zcp_gsparsity",
         ]:
-            config.search.epochs = 81  # A default fallback
+            config.search.epochs = 27  # A default fallback
             logging.warning(
                 f"Could not determine budget. Falling back to default epochs: {config.search.epochs}"
             )
@@ -1059,7 +1059,7 @@ def objective(trial):
         # For two-stage methods, the budget is managed internally by the pruner.
         # We can set a max, but the pruner decides the actual epochs for each stage.
         # If budget was calculated, use it. Otherwise, fall back to a default.
-        total_epochs = current_budget if current_budget != -1 else 81
+        total_epochs = current_budget if current_budget != -1 else 27
         config.search.epochs = total_epochs
         # Split the budget between stages if needed, e.g., 40/60 split
         stage1_budget = int(config.search.epochs * 0.4)
@@ -1510,11 +1510,11 @@ def main():
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
-        max_res = 81
+        max_res = 27
         min_res = 21
         # min_res = 1
     else:
-        max_res = 81
+        max_res = 27
         min_res = 1
 
     sampler = DEHBSampler(seed=seed)

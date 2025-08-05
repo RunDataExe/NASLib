@@ -1051,7 +1051,7 @@ def objective(trial):
     config = CfgNode.load_cfg(json.dumps(config))
 
     # Set the dataset subset percentage for HPO #!
-    config.dataset_subset = 0.01
+    config.dataset_subset = 0.001
 
     # Set epochs for HPO trial.
     # We hardcode this to 1 epoch for one-stage methods and 1+1 for two-stage methods.

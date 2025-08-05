@@ -264,6 +264,10 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     list(op_indices) for op_indices in self.graph.get_arch_iterator()
                 ]
                 self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
+                print(
+                    "Iterator before removal:",
+                    len(list(self.graph.get_arch_iterator())),
+                )
 
                 for idx in worst_set:
                     logger.info(

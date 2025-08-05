@@ -273,9 +273,6 @@ class GSparseOptimizer(MetaOptimizer):
                 logger.info(
                     f"Removed {len(worst_set)} architectures from the search space."
                 )
-                print(
-                    "Iterator after removal:", len(list(self.graph.get_arch_iterator()))
-                )
         else:
             logger.info(
                 "No resume path nor pre-computed zero-cost scores provided or paths do not exist. Starting architecture removal process with full search space."

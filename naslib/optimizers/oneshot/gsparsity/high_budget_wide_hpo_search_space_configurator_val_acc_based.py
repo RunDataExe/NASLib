@@ -147,7 +147,7 @@ import shutil
 # print("-----------------------------")
 # import multiprocessing as mp
 
-from optuna.trial import TrialState
+from optuna.trial import TrialState, FrozenTrial
 
 from naslib.optimizers import (
     RandomSearch,
@@ -398,6 +398,27 @@ def is_trial_run(hp_config, run_hashes):
 #     print("Trial B types:")
 #     pprint.pprint({k: type(v) for k, v in trial_b.params.items()})
 #     print("Are dicts equal?", trial_a.params == trial_b.params)
+
+
+def _copy_trial_artifacts(source_trial_number, dest_trial_path, base_out_dir):
+    """Copies all artifacts from a source trial directory to a destination."""
+    # Reconstruct the path to the source trial's directory
+    # Note: This assumes the directory structure defined in `update_config`
+    source_trial_path = os.path.dirname(dest_trial_path)  # Gets the parent directory
+    source_trial_path = os.path.join(source_trial_path, f"trial_{source_trial_number}")
+
+    if os.path.isdir(source_trial_path):
+        logging.info(f"Copying artifacts from {source_trial_path} to {dest_trial_path}")
+        # Ensure destination exists and is empty to avoid merging issues
+        if os.path.exists(dest_trial_path):
+            shutil.rmtree(dest_trial_path)
+        os.makedirs(dest_trial_path, exist_ok=True)
+        shutil.copytree(source_trial_path, dest_trial_path, dirs_exist_ok=True)
+    else:
+        logging.warning(
+            f"Source directory for artifact copy not found: {source_trial_path}. "
+            f"New trial directory will be empty."
+        )
 
 
 def objective(trial):
@@ -846,74 +867,188 @@ def objective(trial):
         "threshold": 0.00001,  # Minimum change to be considered an improvement
     }
 
-    all_trials = trial.study.get_trials(deepcopy=False)
-    hashed_pruned_or_completed_trials = {
-        trial_hash(t.params)
-        for t in all_trials
-        if t.state in [TrialState.COMPLETE, TrialState.PRUNED]
-    }
-    logging.debug(
-        f"Number of completed/pruned trials: {len(hashed_pruned_or_completed_trials)}"
-    )
+    # --- Start: New, Smarter Duplicate & Promotion Handling Logic ---
+    pruner = trial.study.pruner
+    current_budget = -1  # Default value if budget cannot be determined
+    resume_from_trial_number = None  # Track which trial to resume from
 
-    interrupted_trials = [
+    # Step 1: Calculate the intended budget for the current trial.
+    if hasattr(pruner, "_get_bracket_id_after_init") and hasattr(
+        pruner, "_get_budget_id"
+    ):
+        try:
+            # Manually construct a FrozenTrial. `create_trial` does not accept `number`.
+            # This object is a temporary representation used for budget calculation.
+            frozen_trial_for_budget_calc = FrozenTrial(
+                number=trial.number,
+                state=TrialState.RUNNING,
+                value=None,
+                datetime_start=trial.datetime_start,
+                datetime_complete=None,
+                params=trial.params,
+                distributions=trial.distributions,
+                user_attrs={},
+                system_attrs={},
+                intermediate_values={},
+                trial_id=trial._trial_id,
+            )
+            if len(pruner._pruners) == 0:
+                pruner._try_initialization(trial.study)
+            if pruner._budget_candidates is None:
+                pruner._create_budget_candidates(trial.study)
+
+            bracket_id = pruner._get_bracket_id_after_init(
+                trial.study, frozen_trial_for_budget_calc
+            )
+            budget_id = pruner._get_budget_id(
+                trial.study, frozen_trial_for_budget_calc, bracket_id
+            )
+            current_budget = pruner._budget_candidates[budget_id]
+            trial.set_user_attr("budget", current_budget)
+            logging.info(
+                f"Trial {trial.number} has an intended budget of {current_budget} steps."
+            )
+        except Exception as e:
+            logging.warning(
+                f"Could not determine budget for trial {trial.number}. Proceeding without reuse/resume logic. Error: {e}"
+            )
+
+    # Step 2: Find all previous trials with identical hyperparameters.
+    current_params_hash = trial_hash(trial.params)
+    all_trials = trial.study.get_trials(deepcopy=False)
+    matching_trials = [
         t
         for t in all_trials
-        if t.number != trial.number and t.state in [TrialState.FAIL, TrialState.RUNNING]
+        if t.number != trial.number and trial_hash(t.params) == current_params_hash
     ]
-    logging.debug(
-        f"Number of interrupted (failed or running) trials: {len(interrupted_trials)}"
-    )
-    last_interrupted = (
-        max(interrupted_trials, key=lambda t: t.number) if interrupted_trials else None
-    )
-    hashed_last_interrupted = (
-        trial_hash(last_interrupted.params) if last_interrupted else None
-    )
-    logging.debug(
-        f"Last interrupted trial hash: {hashed_last_interrupted}"
-        if hashed_last_interrupted
-        else "No interrupted trials."
-    )
-    logging.debug(
-        f"Last interrupted trial number: {last_interrupted.number}"
-        if last_interrupted
-        else "No interrupted trials."
-    )
-    logging.debug(f"Current trial number: {trial.number}")
 
-    current_hash = trial_hash(trial.params)
-    logging.debug(f"Current trial hash: {current_hash}")
-    logging.debug(
-        f"All pruned/completed trial hashes: {hashed_pruned_or_completed_trials}"
-    )
-    logging.debug(f"Last interrupted trial hash: {hashed_last_interrupted}")
-    # Skip if trial already completed/pruned
-    if current_hash in hashed_pruned_or_completed_trials:
-        raise optuna.TrialPruned()
+    # Step 3: Apply the specified reuse/resume logic if matches are found and budget is known.
+    if matching_trials and current_budget != -1:
+        # --- START REVISED LOGIC ---
+        # Priority 1: Find an exact match that is already finished (COMPLETE or PRUNED).
+        # This is the most efficient reuse, as it requires no new computation.
+        finished_exact_match = next(
+            (
+                t
+                for t in matching_trials
+                if t.user_attrs.get("budget") == current_budget
+                and t.state in [TrialState.COMPLETE, TrialState.PRUNED]
+            ),
+            None,
+        )
 
-    # If there was an interrupted trial, only resume it (prune others directly)
-    if current_hash == hashed_last_interrupted:
-        trial.set_user_attr("original_trial_number", last_interrupted.number)
+        if finished_exact_match:
+            temp_config = CfgNode.load_cfg(json.dumps({"search": {}, "evaluation": {}}))
+            dest_trial_path = update_config(
+                temp_config,
+                optimizer_type,
+                search_space_type,
+                dataset,
+                seed,
+                out_dir,
+                trial,
+            ).save
 
-    # logging.debug(
-    #         "Comparing all trials to find duplicates or similar configurations..."
-    #     )
-    # num_trials = len(all_trials)
-    # for i in range(num_trials):
-    #     for j in range(num_trials):
-    #         logging.debug(
-    #             f"Comparing trial {i} with trial {j} (number: {all_trials[i].number}, {all_trials[j].number})"
-    #         )
-    #         debug_trial_params(all_trials[i], all_trials[j])
+            if finished_exact_match.state == TrialState.COMPLETE:
+                logging.info(
+                    f"Trial {trial.number} is an exact match for COMPLETED Trial {finished_exact_match.number} "
+                    f"(budget {current_budget}). Reusing its value: {finished_exact_match.value}."
+                )
+                _copy_trial_artifacts(
+                    finished_exact_match.number, dest_trial_path, out_dir
+                )
+                trial.report(finished_exact_match.value, current_budget)
+                return finished_exact_match.value
+
+            elif finished_exact_match.state == TrialState.PRUNED:
+                _copy_trial_artifacts(
+                    finished_exact_match.number, dest_trial_path, out_dir
+                )
+                last_step = finished_exact_match.last_step
+                if last_step is not None:
+                    last_value = finished_exact_match.intermediate_values[last_step]
+                    trial.report(last_value, last_step)
+                    logging.info(
+                        f"Trial {trial.number} is an exact match for PRUNED Trial {finished_exact_match.number} "
+                        f"(budget {current_budget}). Reporting its last value ({last_value} at step {last_step}) and pruning."
+                    )
+                else:
+                    logging.info(
+                        f"Trial {trial.number} is an exact match for PRUNED Trial {finished_exact_match.number}, which had no reported values. Pruning immediately."
+                    )
+                raise optuna.TrialPruned()
+
+        else:
+            # Priority 2: Handle promotions and resuming failed trials.
+            # This block runs only if no finished exact match was found.
+            matching_trials.sort(
+                key=lambda t: t.user_attrs.get("budget", 0), reverse=True
+            )
+            highest_budget_trial = matching_trials[0]
+            highest_budget = highest_budget_trial.user_attrs.get("budget", 0)
+
+            # Scenario 2a: Promotion (Current budget is higher than any previous attempt).
+            if current_budget > highest_budget:
+                if highest_budget_trial.user_attrs.get("internal_early_stopped", False):
+                    logging.info(
+                        f"Skipping promotion for Trial {trial.number} because its candidate "
+                        f"(Trial {highest_budget_trial.number}) was internally early-stopped. Reusing value."
+                    )
+                    trial.user_attrs["internal_early_stopped"] = True
+                    trial.report(highest_budget_trial.value, current_budget)
+                    return highest_budget_trial.value
+
+                logging.info(
+                    f"Trial {trial.number} (budget {current_budget}) is a promotion from Trial "
+                    f"{highest_budget_trial.number} (budget {highest_budget}, state {highest_budget_trial.state})."
+                )
+                resume_from_trial_number = highest_budget_trial.number
+                trial.set_user_attr("promoted_from", resume_from_trial_number)
+
+            # Scenario 2b: Resuming an interrupted trial at the same budget.
+            # This happens if a trial with this budget exists but is in FAIL/RUNNING state.
+            else:
+                interrupted_trials = [
+                    t
+                    for t in matching_trials
+                    if t.state in [TrialState.FAIL, TrialState.RUNNING]
+                ]
+                if interrupted_trials:
+                    last_interrupted = max(interrupted_trials, key=lambda t: t.number)
+                    logging.info(
+                        f"Trial {trial.number} matches the last interrupted trial (Trial {last_interrupted.number}). "
+                        "Setting up to resume."
+                    )
+                    resume_from_trial_number = last_interrupted.number
+                    trial.set_user_attr(
+                        "resumed_interrupted_from", resume_from_trial_number
+                    )
+        # --- END REVISED LOGIC ---
 
     # Convert dictionary to CfgNode
     config = CfgNode.load_cfg(json.dumps(config))
 
     # Set the dataset subset percentage for HPO #!
-    config.dataset_subset = 0.2
+    config.dataset_subset = 0.001
 
     # Set epochs for HPO trial.
+    if current_budget != -1:
+        config.search.epochs = current_budget
+        logging.info(f"Setting trial epochs to the calculated budget: {current_budget}")
+    else:
+        # Fallback for one-stage methods if budget calculation fails
+        # For two-stage methods, a different logic is applied below.
+        if optimizer_type not in [
+            "inverted_bananas_gsparsity",
+            "inverted_bananas_zcp_gsparsity",
+            "self_training_inverted_bananas_gsparsity",
+            "self_training_inverted_bananas_zcp_gsparsity",
+        ]:
+            config.search.epochs = 81  # A default fallback
+            logging.warning(
+                f"Could not determine budget. Falling back to default epochs: {config.search.epochs}"
+            )
+
     # We hardcode this to 1 epoch for one-stage methods and 1+1 for two-stage methods.
     if optimizer_type in [
         "inverted_bananas_gsparsity",
@@ -921,21 +1056,27 @@ def objective(trial):
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
-        config.search.epochs = 70
-        config.stage1.search.epochs = 20
-        config.stage1.search.train_epochs = 7
-        config.stage2.search.epochs = 50
-    else:
-        config.search.epochs = 70
+        # For two-stage methods, the budget is managed internally by the pruner.
+        # We can set a max, but the pruner decides the actual epochs for each stage.
+        # If budget was calculated, use it. Otherwise, fall back to a default.
+        total_epochs = current_budget if current_budget != -1 else 81
+        config.search.epochs = total_epochs
+        # Split the budget between stages if needed, e.g., 40/60 split
+        stage1_budget = int(config.search.epochs * 0.4)
+        config.stage1.search.epochs = stage1_budget
+        config.stage1.search.train_epochs = stage1_budget  # For self-training
+        config.stage2.search.epochs = config.search.epochs - stage1_budget
+        logging.info(
+            f"Two-stage method epochs set. Total: {config.search.epochs}, Stage 1: {config.stage1.search.epochs}, Stage 2: {config.stage2.search.epochs}"
+        )
 
     # Update config with other details
     config = update_config(
         config, optimizer_type, search_space_type, dataset, seed, out_dir, trial
     )
 
-    # --- Handle resuming by copying files from the failed/interrupted trial ---
-    original_trial_number = trial.user_attrs.get("original_trial_number")
-    if original_trial_number is not None:
+    # --- Handle resuming by copying files from the identified trial ---
+    if resume_from_trial_number is not None:
         # Build source path with zcp_method if needed
         source_dir_parts = [
             out_dir,
@@ -947,7 +1088,7 @@ def objective(trial):
         ]
         if "zcp_" in optimizer_type:
             source_dir_parts.append(zcp_method)
-        source_dir_parts.append(f"trial_{original_trial_number}")
+        source_dir_parts.append(f"trial_{resume_from_trial_number}")
         source_trial_path = os.path.join(*source_dir_parts)
         dest_trial_path = config.save
 
@@ -955,9 +1096,7 @@ def objective(trial):
             logging.info(
                 f"Copying entire resume directory from {source_trial_path} to {dest_trial_path}"
             )
-            # Ensure destination directory exists before copying
             os.makedirs(dest_trial_path, exist_ok=True)
-            # Copy all contents (checkpoints, errors.json, log.log etc.)
             shutil.copytree(source_trial_path, dest_trial_path, dirs_exist_ok=True)
         else:
             logging.warning(
@@ -1313,9 +1452,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     else:
         from naslib.defaults.trainer_multi_dataloading_workers import Trainer
 
-        trainer = Trainer(
-            optimizer, config, lightweight_output=False
-        )  #! just changed to true
+        trainer = Trainer(optimizer, config, lightweight_output=False)
 
     trainer.search(
         resume_from=search_resume_from,
@@ -1373,11 +1510,11 @@ def main():
         "self_training_inverted_bananas_gsparsity",
         "self_training_inverted_bananas_zcp_gsparsity",
     ]:
-        max_res = 70
+        max_res = 81
         min_res = 21
         # min_res = 1
     else:
-        max_res = 70
+        max_res = 81
         min_res = 1
 
     sampler = DEHBSampler(seed=seed)

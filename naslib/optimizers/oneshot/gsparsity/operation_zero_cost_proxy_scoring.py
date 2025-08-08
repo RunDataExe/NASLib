@@ -186,8 +186,10 @@ class SyntheticMicroArchitecture(nn.Module):
             classifier_in_features = 1
 
         self.classifier = nn.Linear(classifier_in_features, self._num_classes)
-        logger.info(
-            f"SyntheticMicroArch created with classifier: Linear(in_features={self.classifier.in_features}, out_features={self.classifier.out_features})"
+        logger.debug(
+            "SyntheticMicroArch classifier: Linear(in_features=%d, out_features=%d)",
+            self.classifier.in_features,
+            self.classifier.out_features,
         )
 
         with torch.no_grad():
@@ -351,11 +353,16 @@ def evaluate_micro_architecture_zcp(
             f"Unsupported dimensions in output shape: {operation_output_full_shape}"
         )
 
-    logger.info(
-        f"Evaluating operation {type(operation).__name__} with ZCP method: {zcp_method}"
+    logger.debug(
+        "Evaluating operation %s with ZCP method: %s",
+        type(operation).__name__,
+        zcp_method,
     )
-    logger.info(
-        f"Op Input CHW: {op_input_chw}, Op Output CHW: {op_output_chw}, Num Classes: {num_classes}"
+    logger.debug(
+        "Op Input CHW: %s, Op Output CHW: %s, Num Classes: %d",
+        str(op_input_chw),
+        str(op_output_chw),
+        num_classes,
     )
 
     # Configuration for SyntheticMicroArchitecture
@@ -405,51 +412,26 @@ def evaluate_micro_architecture_zcp(
             intermediate_score = (
                 1.0 / (score + 1e-10) if abs(score) < 1e-9 else 1.0 / score
             )
-            logger.info(
-                f"Original ZCP score ({zcp_method}): {score:.6f}, Inverted score: {intermediate_score:.6f}"
+            logger.debug(
+                "Original ZCP score (%s): %.6f, Inverted score: %.6f",
+                zcp_method,
+                score,
+                intermediate_score,
             )
-        # elif zcp_method.lower() in ["params"]:
-        #     params = sum(p.numel() for p in operation.parameters() if p.requires_grad)
-        #     intermediate_params = torch.log(
-        #         torch.tensor(params, dtype=torch.float32) / 100 + 1e-6
-        #     )
-        #     final_param = torch.sigmoid(torch.tensor(params, dtype=torch.float32)).item()
-        #     final_param_scaled = torch.sigmoid(
-        #         torch.tensor(intermediate_params, dtype=torch.float32)
-        #     ).item()
-        #     logger.info(
-        #         f"Raw params: {params:.6f}, Log-scaled params: {intermediate_params:.6f}, Sigmoid mapped without log-scaling params: {final_param:.6f}, Sigmoid mapped with log-scaling params: {final_param_scaled:.6f}"
-        #     )
-        #     return final_param_scaled
         else:
-            # For most ZCPs (higher is better), use as is.
             intermediate_score = float(score)
-            logger.info(
-                f"Intermediate ZCP score ({zcp_method}): {intermediate_score:.6f}"
+            logger.debug(
+                "Intermediate ZCP score (%s): %.6f",
+                zcp_method,
+                intermediate_score,
             )
-
-            # # # Apply sigmoid to map the score to [0, 1]
-            # # final_score_tensor = torch.sigmoid(
-            # #     torch.tensor(intermediate_score, dtype=torch.float32)
-            # # )
-            # # final_score = final_score_tensor.item()
-            # final_score_tensor = F.softplus(
-            #     torch.tensor(intermediate_score, dtype=torch.float32)
-            # )
-            # final_score = final_score_tensor.item()
-            # logger.info(
-            #     f"Intermediate score: {intermediate_score:.6f}, Softplus mapped score: {final_score:.6f}"
-            # )
-
-            # return final_score
             return intermediate_score
-
     except Exception as e:
         logger.error(
-            f"ZCP evaluation failed for operation {type(operation).__name__} with method {zcp_method}: {str(e)}",
+            "ZCP evaluation failed for operation %s with method %s: %s",
+            type(operation).__name__,
+            zcp_method,
+            str(e),
             exc_info=True,
         )
-        # Default score on critical failure, sigmoid(0.0) = 0.5
-        # If a true 0.0 is desired post-sigmoid, this should return a very negative number before sigmoid.
-        # For now, returning 0.5 to indicate neutral/uncertainty due to failure.
         return torch.sigmoid(torch.tensor(0.0)).item()

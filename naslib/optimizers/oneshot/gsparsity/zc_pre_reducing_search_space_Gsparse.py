@@ -169,7 +169,7 @@ class GSparseOptimizer(MetaOptimizer):
 
         if resume_from_path and os.path.exists(resume_from_path):
             checkpoint = torch.load(resume_from_path, map_location="cpu")
-            logger.info(f"Checkpoint keys: {list(checkpoint.keys())}")
+            logger.debug("Checkpoint keys: %s", list(checkpoint.keys()))
 
             if "pruned_op_indices" in checkpoint:
                 # checkpoint["pruned_op_indices"] is a SimpleStateDict instance
@@ -180,7 +180,8 @@ class GSparseOptimizer(MetaOptimizer):
                 elif isinstance(state, dict):
                     self.pruned_op_indices = state["pruned_op_indices"]
                 logger.info(
-                    f"Loaded {len(self.pruned_op_indices)} pruned architectures from checkpoint."
+                    "Loaded %d pruned architectures from checkpoint.",
+                    len(self.pruned_op_indices),
                 )
                 for op_indices in self.pruned_op_indices:
                     remove_architecture(
@@ -246,32 +247,37 @@ class GSparseOptimizer(MetaOptimizer):
                 worst_params = np.argsort(param_scores)[:750]
 
                 # Log the results
-                logger.info(f"Worst 750 indices (jacov): {worst_jacov}")
-                logger.info(f"Worst 750 indices (synflow): {worst_synflow}")
-                logger.info(f"Worst 750 indices (params): {worst_params}")
+                logger.debug("Worst 750 indices (jacov) count: %d", len(worst_jacov))
+                logger.debug(
+                    "Worst 750 indices (synflow) count: %d", len(worst_synflow)
+                )
+                logger.debug("Worst 750 indices (params) count: %d", len(worst_params))
 
                 # Find common worst indices across all three metrics
                 worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
-                logger.info(f"Common worst indices: {sorted(worst_set)}")
+                logger.debug("Common worst indices count: %d", len(worst_set))
 
                 arch_list = [
                     list(op_indices) for op_indices in self.graph.get_arch_iterator()
                 ]
                 self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
-                print(
-                    "Iterator before removal:",
+                logger.debug(
+                    "Iterator size before removal: %d",
                     len(list(self.graph.get_arch_iterator())),
                 )
 
                 for idx in worst_set:
-                    logger.info(
-                        f"Removing architecture idx={idx}, op_indices={arch_list[idx]}"
+                    logger.debug(
+                        "Removing architecture idx=%d, op_indices=%s",
+                        idx,
+                        arch_list[idx],
                     )
                     remove_architecture(
                         self.graph, arch_list[idx], representation_type="op_indices"
                     )
                 logger.info(
-                    f"Removed {len(worst_set)} architectures from the search space."
+                    "Removed %d architectures from the search space.",
+                    len(worst_set),
                 )
         else:
             logger.info(
@@ -282,7 +288,7 @@ class GSparseOptimizer(MetaOptimizer):
             arch_list = [
                 list(op_indices) for op_indices in self.graph.get_arch_iterator()
             ]
-            logger.info(f"Enumerating {len(arch_list)} architectures (full space).")
+            logger.info("Enumerating %d architectures (full space).", len(arch_list))
 
             # import random  # <-- Add this import if not already present
 
@@ -302,13 +308,13 @@ class GSparseOptimizer(MetaOptimizer):
                 arch_graph.set_op_indices(op_indices)
                 arch_graph = arch_graph.to(self.device)
                 arch_graph.parse()
-                logger.info(f"Scoring architecture {idx}: {op_indices}")
+                logger.debug("Scoring architecture %d: %s", idx, op_indices)
                 jacov = jacov_pred.query(arch_graph, self.train_loader)
-                logger.info(f"Jacov score: {jacov}")
+                logger.debug("Jacov score: %s", str(jacov))
                 synflow = synflow_pred.query(arch_graph, self.train_loader)
-                logger.info(f"Synflow score: {synflow}")
+                logger.debug("Synflow score: %s", str(synflow))
                 params = params_pred.query(arch_graph, self.train_loader)
-                logger.info(f"Params score: {params}")
+                logger.debug("Params score: %s", str(params))
                 jacov_scores.append(jacov)
                 synflow_scores.append(synflow)
                 param_scores.append(params)
@@ -319,23 +325,24 @@ class GSparseOptimizer(MetaOptimizer):
             worst_jacov = np.argsort(jacov_scores)[:750]
             worst_synflow = np.argsort(synflow_scores)[:750]
             worst_params = np.argsort(param_scores)[:750]
-            logger.info(f"Worst 750 indices (jacov): {worst_jacov}")
-            logger.info(f"Worst 750 indices (synflow): {worst_synflow}")
-            logger.info(f"Worst 750 indices (params): {worst_params}")
+            logger.debug("Worst 750 (jacov) count: %d", len(worst_jacov))
+            logger.debug("Worst 750 (synflow) count: %d", len(worst_synflow))
+            logger.debug("Worst 750 (params) count: %d", len(worst_params))
 
             worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
 
             self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
 
             for idx in worst_set:
-                logger.info(
-                    f"Removing architecture idx={idx}, op_indices={arch_list[idx]}"
+                logger.debug(
+                    "Removing architecture idx=%d, op_indices=%s", idx, arch_list[idx]
                 )
                 remove_architecture(
                     self.graph, arch_list[idx], representation_type="op_indices"
                 )
             logger.info(
-                f"Removed {len(worst_set)} architectures from the search space."
+                "Removed %d architectures from the search space.",
+                len(worst_set),
             )
 
         # 2. add weight parameter to operations without weight
@@ -699,7 +706,8 @@ class GSparseOptimizer(MetaOptimizer):
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
         logger.info(
-            f"Saving checkpoint with {len(self.pruned_op_indices)} pruned architectures."
+            "Saving checkpoint with %d pruned architectures.",
+            len(self.pruned_op_indices),
         )
         return {
             "model": self.graph,

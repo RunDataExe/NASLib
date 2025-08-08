@@ -201,7 +201,7 @@ def remove_architecture(
         representation_type (str, optional): 'op_indices' or 'arch_str'.
                                              Defaults to 'op_indices'.
     """
-    logging.info(
+    logging.debug(
         "Do not use with: set_op_indices, sample_random_architecture (as it calles set_op_indices) convert_op_indices_to_naslib, set_ops, set_cell_ops, check update_edge functions."
     )
     # Step 1: Mark the operations of the specified architecture by setting their beta to 1.

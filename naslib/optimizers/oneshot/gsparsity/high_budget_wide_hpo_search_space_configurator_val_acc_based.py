@@ -10,6 +10,9 @@ import copy
 import time
 import torch
 import shutil
+import multiprocessing as mp
+import torch
+import torch.multiprocessing as tmp
 
 
 # DONE and verified till here
@@ -858,6 +861,12 @@ def objective(trial):
         #     config["stage1"]["search"]["num_arches_to_mutate"] = 0
         #     config["stage1"]["search"]["max_mutations"] = 0
 
+    # HPO-safe dataloader defaults for all methods
+    config["search"]["train_workers"] = 0
+    config["search"]["val_workers"] = 0
+    # Disable timeout by default; enable only for debugging slow workers
+    config["dataloader_timeout"] = 0
+
     # Add common evaluation config
     config["evaluation"] = evaluation
 
@@ -1489,14 +1498,19 @@ def main():
     """Main function to run the HPO study"""
     # Set the start method for multiprocessing to 'spawn' to avoid deadlocks with CUDA.
     # This needs to be done in the main process before any subprocesses are created.
-    # try:
-    #     if mp.get_start_method(allow_none=True) != "spawn":
-    #         mp.set_start_method("spawn", force=True)
-    #         logging.info("Set multiprocessing start method to 'spawn'.")
-    # except RuntimeError:
-    #     # This can be raised if the context is already started.
-    #     logging.warning("Could not set multiprocessing start method.")
-    #     pass
+    try:
+        if mp.get_start_method(allow_none=True) != "spawn":
+            mp.set_start_method("spawn", force=True)
+            logging.info("Set multiprocessing start method to 'spawn'.")
+    except RuntimeError:
+        logging.warning("Multiprocessing context already started; spawn not set.")
+
+    # Avoid FD exhaustion / IPC issues in DataLoader workers
+    try:
+        tmp.set_sharing_strategy("file_system")
+        logging.info("Set torch.multiprocessing sharing strategy to 'file_system'.")
+    except Exception as e:
+        logging.warning(f"Could not set sharing strategy: {e}")
 
     # DEHB setup
     module = optunahub.load_module("samplers/dehb", force_reload=False)

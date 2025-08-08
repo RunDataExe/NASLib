@@ -38,7 +38,7 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent
 
 
-def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4):
+def get_train_val_loaders(config, mode="train", train_workers=0, val_workers=0):
     """
     Constructs the dataloaders and transforms for training, validation and test data.
     """
@@ -214,61 +214,47 @@ def get_train_val_loaders(config, mode="train", train_workers=12, val_workers=4)
 
     g = torch.Generator()
     g.manual_seed(seed)
+    use_cuda = torch.cuda.is_available()
+    timeout = getattr(config, "dataloader_timeout", 0)
+
+    persistent_train = True if train_workers > 0 else False
+    persistent_val = True if val_workers > 0 else False
+
     train_queue = torch.utils.data.DataLoader(
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-        pin_memory=True,
+        pin_memory=use_cuda,
         num_workers=train_workers,
         worker_init_fn=train_init_fn,
         generator=g,
+        timeout=timeout if train_workers > 0 else 0,
+        persistent_workers=persistent_train,
     )
 
     valid_queue = torch.utils.data.DataLoader(
         train_data,
         batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
-        pin_memory=True,
+        pin_memory=use_cuda,
         num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
         generator=g,
+        timeout=timeout if val_workers > 0 else 0,
+        persistent_workers=persistent_val,
     )
 
     test_queue = torch.utils.data.DataLoader(
         test_data,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=use_cuda,
         num_workers=val_workers,
         worker_init_fn=val_test_init_fn,
         generator=g,
+        timeout=timeout if val_workers > 0 else 0,
+        persistent_workers=persistent_val,
     )
-    # train_queue = torch.utils.data.DataLoader(
-    #     train_data,
-    #     batch_size=batch_size,
-    #     sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-    #     pin_memory=True,
-    #     num_workers=0,
-    #     worker_init_fn=np.random.seed(seed),
-    # )
-
-    # valid_queue = torch.utils.data.DataLoader(
-    #     train_data,
-    #     batch_size=batch_size,
-    #     sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:num_train]),
-    #     pin_memory=True,
-    #     num_workers=0,
-    #     worker_init_fn=np.random.seed(seed),
-    # )
-
-    # test_queue = torch.utils.data.DataLoader(
-    #     test_data,
-    #     batch_size=batch_size,
-    #     shuffle=False,
-    #     pin_memory=True,
-    #     num_workers=0,
-    #     worker_init_fn=np.random.seed(seed),
-    # )
     return train_queue, valid_queue, test_queue, train_transform, valid_transform
 
 

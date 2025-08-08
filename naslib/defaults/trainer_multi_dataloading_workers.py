@@ -702,15 +702,20 @@ class Trainer(object):
 
     @staticmethod
     def build_search_dataloaders(config):
+        # Read from config.search.* if present, default to 0 for safety in HPO
+        tw = getattr(config.search, "train_workers", 0)
+        vw = getattr(config.search, "val_workers", 0)
         train_queue, valid_queue, test_queue, _, _ = utils.get_train_val_loaders(
-            config, mode="train"
+            config, mode="train", train_workers=tw, val_workers=vw
         )
         return train_queue, valid_queue, _  # test_queue is not used in search currently
 
     @staticmethod
     def build_eval_dataloaders(config):
+        tw = getattr(config.search, "train_workers", 0)
+        vw = getattr(config.search, "val_workers", 0)
         train_queue, valid_queue, test_queue, _, _ = utils.get_train_val_loaders(
-            config, mode="val"
+            config, mode="val", train_workers=tw, val_workers=vw
         )
         return train_queue, valid_queue, test_queue
 

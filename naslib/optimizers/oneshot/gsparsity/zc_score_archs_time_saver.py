@@ -68,7 +68,7 @@ def main():
     )
 
     args = parser.parse_args()
-    seed = 1544457859
+    seed = 2152435495
 
     np.random.seed(seed)
     torch.manual_seed(seed)

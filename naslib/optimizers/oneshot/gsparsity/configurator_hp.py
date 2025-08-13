@@ -313,7 +313,6 @@ optimizer_configs = {
             "cutout": False,  # # in paper False
             "cutout_length": 16,  # in paper 16
             "cutout_prob": 1.0,  # ADDED: allow override from HPO/final scripts
-            "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
         },
     },
     "zcp-pre_zcp_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
@@ -334,7 +333,6 @@ optimizer_configs = {
             "cutout_length": 16,
             "cutout_prob": 1.0,  # ADDED
             "zcp_method": zcp_method,  #! Enable zero-cost predictors
-            "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
         },
     },
     "gsparsity": {

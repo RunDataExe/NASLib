@@ -487,6 +487,7 @@ def objective(trial):
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
+                "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/unpruned",
             },
         }
     elif optimizer_type == "zcp-pre_gsparsity":
@@ -550,6 +551,7 @@ def objective(trial):
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
                 "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
+                "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/pruned",
             },
         }
     elif optimizer_type == "inverted_bananas_gsparsity":

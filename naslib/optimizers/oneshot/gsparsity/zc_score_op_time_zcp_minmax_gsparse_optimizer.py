@@ -360,16 +360,18 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 edge.data.op[i].register_parameter("weight", weight)
 
     def adapt_search_space(self, search_space, scope=None, train_loader=None, **kwargs):
-        """
-        Modify the search space to fit the optimizer's needs,
-        e.g. discretize, add alpha flag and shared weight parameter, ...
-        Args:
-            search_space (Graph): The search space we are doing NAS in.
-            scope (str or list(str)): The scope of the search space which
-                should be optimized by the optimizer.
-        """
         self.search_space = search_space
         self.train_loader = train_loader
+        # NEW: enforce deterministic CUDA math
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:
+            pass
         graph = search_space.clone()
 
         # If there is no scope defined, let's use the search space default one

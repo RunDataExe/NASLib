@@ -564,7 +564,17 @@ def main():
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    random.seed(args.seed)  # ensure full reproducibility
+    random.seed(args.seed)
+    # NEW: enforce deterministic CUDA math
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except Exception:
+        pass
 
     # Prepare paths
     base = args.out_base_dir

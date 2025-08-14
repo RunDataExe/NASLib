@@ -277,9 +277,18 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         self.search_space = search_space
         self.train_loader = train_loader
-        # graph = search_space.clone()
         self.graph = search_space
 
+        # NEW: enforce deterministic CUDA math
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:
+            pass
         # If there is no scope defined, let's use the search space default one
         if not scope:
             scope = self.graph.OPTIMIZER_SCOPE

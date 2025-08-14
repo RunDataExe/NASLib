@@ -511,7 +511,7 @@ class GSparseOptimizer(MetaOptimizer):
         return {
             "model": self.graph,
             "op_optimizer": self.op_optimizer,
-            "op_optimizer_evaluate": self.op_optimizer_evaluate,
+            # "op_optimizer_evaluate": self.op_optimizer_evaluate,
         }
 
 

@@ -49,7 +49,7 @@ class ShapeAnnotator:
         shape_info = self._collect_shapes(graph, dummy_input)
         
         # Save shape info to file for debugging
-        self._save_shape_info(shape_info)
+        # self._save_shape_info(shape_info)
         
         # Map shape information to graph operations
         self._attach_shapes_to_graph(graph, shape_info)

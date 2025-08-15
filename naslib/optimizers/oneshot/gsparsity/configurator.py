@@ -316,7 +316,7 @@ optimizer_configs = {
             # "cutout_prob":  # (I think NASLIB only needs this for gsparsity on nasbench201)
             "zcp_method": zcp_method,  #! Enable zero-cost predictors has to be true else it is no zcp_gsparsity
             "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
-            "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/pruned",
+            # "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/pruned",
         },
     },
     "gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
@@ -355,7 +355,7 @@ optimizer_configs = {
             "cutout": False,
             "cutout_length": 16,
             "zcp_method": zcp_method,
-            "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/unpruned",
+            # "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/unpruned",
         },
     },
     "inverted_bananas": {
@@ -763,7 +763,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
 
     # Set up the logger
     logger = setup_logger(config.save + "/log.log")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # Configure the 'fvcore' logger to use the same file handler
     # as the main application logger.
@@ -778,7 +778,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         # Add the application's file handler to the fvcore logger
         fvcore_logger.addHandler(app_file_handler)
         # Set the level for the fvcore logger. INFO will capture INFO and WARNING messages.
-        fvcore_logger.setLevel(logging.INFO)
+        fvcore_logger.setLevel(logging.DEBUG)
         # Prevent fvcore messages from being propagated to ancestor loggers,
         # as they are now explicitly handled by the app_file_handler.
         # This helps avoid duplicate messages if the root logger also has handlers (e.g., console).
@@ -875,13 +875,18 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     if optimizer_type == "drnas":
         optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
     elif optimizer_type == "gsparsity":
-        optimizer.adapt_search_space(search_space=search_space)
+        optimizer.adapt_search_space(
+            search_space=search_space,
+            dataset_api=dataset_api,
+        )
     elif optimizer_type == "zcp_gsparsity":
         train_loader, _, _, _, _ = get_train_val_loaders(
             config, train_workers=0, val_workers=0
         )
         optimizer.adapt_search_space(
-            search_space=search_space, train_loader=train_loader
+            search_space=search_space,
+            train_loader=train_loader,
+            dataset_api=dataset_api,
         )
     elif (
         optimizer_type == "zcp-pre_gsparsity"
@@ -894,6 +899,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
             search_space=search_space,
             train_loader=train_loader,
             resume_from_path=search_resume_from,
+            dataset_api=dataset_api,
         )
     elif optimizer_type in [
         "rs",

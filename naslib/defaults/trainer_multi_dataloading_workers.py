@@ -99,6 +99,10 @@ class Trainer(object):
                 "runtime": [],
                 "train_time": [],
                 "arch_eval": [],
+                "queried_test_acc": [],
+                "queried_val_acc": [],
+                "queried_train_acc": [],
+                "scaled_queried_train_time": [],
                 "params": n_parameters,
                 "internal_early_stopping_events": [],  # For Bananas-like optimizers
             }
@@ -413,14 +417,26 @@ class Trainer(object):
             self.periodic_checkpointer.step(e)
 
             anytime_results = self.optimizer.test_statistics()
-            # if anytime_results:
-            # record anytime performance
-            # self.search_trajectory.arch_eval.append(anytime_results)
-            # log_every_n_seconds(
-            #     logging.INFO,
-            #     "Epoch {}, Anytime results: {}".format(e, anytime_results),
-            #     n=5,
-            # )
+            if anytime_results:
+                # record anytime performance
+                test_acc, val_acc, train_acc, train_time = anytime_results
+
+                comp_factor = getattr(self.config.search, "comp_factor", 1.0)
+                scaling_epochs = getattr(
+                    self.config.search, "scaling_factor_epochs", 1.0
+                )
+
+                scaled_train_time = train_time * scaling_epochs * comp_factor
+
+                self.search_trajectory.queried_test_acc.append(test_acc)
+                self.search_trajectory.queried_val_acc.append(val_acc)
+                self.search_trajectory.queried_train_acc.append(train_acc)
+                self.search_trajectory.queried_train_time.append(scaled_train_time)
+                logger.info(
+                    "Epoch {}, Queried expanded anytime results: Test Acc: {:.5f}, Val Acc: {:.5f}, Train Acc: {:.5f}, Scaled Train Time: {:.5f}".format(
+                        e, test_acc, val_acc, train_acc, scaled_train_time
+                    )
+                )
 
             self._log_to_json()
 

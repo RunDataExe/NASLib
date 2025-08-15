@@ -223,7 +223,7 @@ evaluation = {
 optimizer_configs = {
     "rs": {  #! has to be allowed to run longer to compensate for the hpo e.g. give runtime or maybe use time per epoch to calculate how many more epochs per dataset it should be allowed to run and check back if it went over the budget if it did remove till in budget
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,
             "fidelity": -1,
         },
@@ -298,7 +298,7 @@ optimizer_configs = {
     },
     "zcp-pre_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,  # in paper 100
             "grad_clip": None,  # in paper 0
             "weight_decay": 60.0,  # original 120 in paper 60
@@ -317,7 +317,7 @@ optimizer_configs = {
     },
     "zcp-pre_zcp_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,  # in paper 100
             "grad_clip": None,  # in paper 0
             "weight_decay": 60.0,  # original 120 in paper 60
@@ -337,7 +337,7 @@ optimizer_configs = {
     },
     "gsparsity": {
         "search": {
-            "checkpoint_freq": 1,
+            "checkpoint_freq": 5,
             "epochs": search_epochs,
             "grad_clip": None,
             "weight_decay": 60.0,
@@ -356,7 +356,7 @@ optimizer_configs = {
     },
     "zcp_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,
+            "checkpoint_freq": 5,
             "epochs": search_epochs,
             "grad_clip": None,
             "weight_decay": 60.0,
@@ -376,7 +376,7 @@ optimizer_configs = {
     },
     "inverted_bananas": {
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,  # ? #! https://github.com/naszilla/bananas/blob/main/nas_algorithms.py epochs = num_init + (total_queries - num_init) / kepochs = 10 + (150 - 10) / 10 = 24 -> to achieve 150 total architecture evaluations
             "k": 10,
             "num_init": 10,
@@ -392,7 +392,7 @@ optimizer_configs = {
     },
     "inverted_bananas_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
@@ -437,7 +437,7 @@ optimizer_configs = {
     },  #! problem when stage 1 complete but stage 2 epoch 0 not complete yet and I want to resume
     "inverted_bananas_zcp_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,  #!
+            "checkpoint_freq": 5,  #!
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
@@ -502,7 +502,7 @@ optimizer_configs = {
     },
     "self_training_inverted_bananas": {
         "search": {
-            "checkpoint_freq": 1,
+            "checkpoint_freq": 5,
             "epochs": search_epochs,
             "k": 10,
             "num_init": 10,
@@ -520,7 +520,7 @@ optimizer_configs = {
     },
     "self_training_inverted_bananas_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,
+            "checkpoint_freq": 5,
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
@@ -565,7 +565,7 @@ optimizer_configs = {
     },
     "self_training_inverted_bananas_zcp_gsparsity": {
         "search": {
-            "checkpoint_freq": 1,
+            "checkpoint_freq": 5,
             "epochs": search_epochs,
             "batch_size": 64,
             "train_portion": 0.5,
@@ -913,13 +913,15 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     if optimizer_type == "drnas":
         optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
     elif optimizer_type == "gsparsity":
-        optimizer.adapt_search_space(search_space=search_space)
+        optimizer.adapt_search_space(search_space=search_space, dataset_api=dataset_api)
     elif optimizer_type == "zcp_gsparsity":
         train_loader, _, _, _, _ = get_train_val_loaders(
             config, train_workers=0, val_workers=0
         )
         optimizer.adapt_search_space(
-            search_space=search_space, train_loader=train_loader
+            search_space=search_space,
+            train_loader=train_loader,
+            dataset_api=dataset_api,
         )
     elif (
         optimizer_type == "zcp-pre_gsparsity"
@@ -932,6 +934,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
             search_space=search_space,
             train_loader=train_loader,
             resume_from_path=search_resume_from,
+            dataset_api=dataset_api,
         )
     elif optimizer_type in [
         "rs",

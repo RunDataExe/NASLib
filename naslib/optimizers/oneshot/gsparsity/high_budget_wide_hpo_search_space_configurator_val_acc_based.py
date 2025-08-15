@@ -487,7 +487,7 @@ def objective(trial):
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
-                "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/unpruned",
+                # "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/unpruned",
             },
         }
     elif optimizer_type == "zcp-pre_gsparsity":
@@ -551,7 +551,7 @@ def objective(trial):
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
                 "zcp_method": zcp_method,
                 "pre_computed_zc_scores": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor/arch_scores",
-                "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/pruned",
+                # "pre_computed_op_zc_scores_dir": "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_op_scoring_timefactor/pruned",
             },
         }
     elif optimizer_type == "inverted_bananas_gsparsity":
@@ -1402,13 +1402,18 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     if optimizer_type == "drnas":
         optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
     elif optimizer_type == "gsparsity":
-        optimizer.adapt_search_space(search_space=search_space)
+        optimizer.adapt_search_space(
+            search_space=search_space,
+            dataset_api=dataset_api,
+        )
     elif optimizer_type == "zcp_gsparsity":
         train_loader, _, _, _, _ = get_train_val_loaders(
             config, train_workers=0, val_workers=0
         )
         optimizer.adapt_search_space(
-            search_space=search_space, train_loader=train_loader
+            search_space=search_space,
+            train_loader=train_loader,
+            dataset_api=dataset_api,
         )
     elif (
         optimizer_type == "zcp-pre_gsparsity"
@@ -1421,6 +1426,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
             search_space=search_space,
             train_loader=train_loader,
             resume_from_path=search_resume_from,
+            dataset_api=dataset_api,
         )
     elif optimizer_type in [
         "rs",

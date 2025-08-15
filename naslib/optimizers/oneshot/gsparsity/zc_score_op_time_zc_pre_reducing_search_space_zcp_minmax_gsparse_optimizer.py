@@ -34,6 +34,28 @@ logger = logging.getLogger(__name__)
 import time
 
 
+def _reset_bn_stats(model):
+    """Resets batch norm running statistics and removes affine parameters."""
+    for m in model.modules():
+        if isinstance(
+            m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)
+        ):
+            # Resetting running stats
+            if hasattr(m, "running_mean") and m.running_mean is not None:
+                m.running_mean.zero_()
+            if hasattr(m, "running_var") and m.running_var is not None:
+                m.running_var.fill_(1)
+            if hasattr(m, "num_batches_tracked") and m.num_batches_tracked is not None:
+                m.num_batches_tracked.zero_()
+
+            # Resetting affine parameters
+            if m.affine:
+                if hasattr(m, "weight") and m.weight is not None:
+                    torch.nn.init.ones_(m.weight)
+                if hasattr(m, "bias") and m.bias is not None:
+                    torch.nn.init.zeros_(m.bias)
+
+
 class ZCP_GSparseOptimizer(MetaOptimizer):
     """
     Implements Group Sparsity as defined in
@@ -103,6 +125,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         logger.info(f"Calculating all ZCP scores with method '{self.zcp_method}' once.")
         raw_zero_cost_proxy_scores = []
         t0 = time.perf_counter()  # START timing (scoring + normalization)
+
+        _reset_bn_stats(graph)
 
         # Define a collection function
         def collect_zero_cost_proxy_scores(edge):
@@ -436,7 +460,12 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             param_scores = []
 
             for idx, op_indices in enumerate(arch_list):
+                # --- MODIFICATION START ---
+                # Re-clone the search space and reset BN stats for each architecture
+                # to ensure a completely identical state for each ZC query.
                 arch_graph = search_space.clone()
+                _reset_bn_stats(arch_graph)
+                # --- MODIFICATION END ---
                 arch_graph.set_op_indices(op_indices)
                 arch_graph = arch_graph.to(self.device)
                 arch_graph.parse()
@@ -968,7 +997,6 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
         if not op_dir or not getattr(self.config.search, "zcp_method", None):
             return False
-
         fname = os.path.join(
             op_dir,
             f"op_scores_{self.dataset}_{self.zcp_method}_seed{self.config.search.seed}.json",
@@ -979,77 +1007,43 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
         with open(fname, "r") as f:
             payload = json.load(f)
-
-        meta = payload.get("meta", {})
         scores = payload.get("scores", [])
         if not isinstance(scores, list) or not scores:
             logger.warning(f"Precomputed op ZCP file malformed or empty: {fname}")
             return False
 
-        normalized = bool(meta.get("normalized", False))
+        name_to_mod = dict(graph.named_modules())
 
-        # Traverse edges/primitives exactly as used by weight accumulation
-        ops = graph.get_all_edge_data("op", scope=scope, private_edge_data=True)
-        expected = sum(len(getattr(m, "primitives", [])) for m in ops)
-        if len(scores) != expected:
-            logger.warning(
-                "Precomputed op ZCP shape mismatch. Falling back to on-the-fly computation."
-            )
-            return False
+        # First set all leaves by their module names if present
+        for entry in scores:
+            leaf_scores = list(entry.get("leaf_scores") or [])
+            leaf_mods = list(entry.get("leaf_modules") or [])
+            if leaf_scores and leaf_mods and len(leaf_scores) == len(leaf_mods):
+                for val, mod_name in zip(leaf_scores, leaf_mods):
+                    if mod_name in name_to_mod:
+                        try:
+                            setattr(
+                                name_to_mod[mod_name], "zero_cost_proxy", float(val)
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "Assign leaf ZCP failed for %s: %s", mod_name, e
+                            )
 
-        idx = 0
-        for mixed_op in ops:
-            prims = getattr(mixed_op, "primitives", [])
-            for prim in prims:
-                entry = scores[idx]
-                idx += 1
-
-                leaf_scores = list(entry.get("leaf_scores", []) or [])
-                prim_score = entry.get("primitive_score", None)
-
-                # Assign to j-level leaves first; then to k-level if leftovers exist
-                try:
-                    J = len(prim.op)
-                    # j-level
-                    for j in range(J):
-                        if leaf_scores:
-                            try:
-                                prim.op[j].zero_cost_proxy = float(leaf_scores.pop(0))
-                            except Exception as e:
-                                logger.debug("Failed assigning j-level ZCP: %s", e)
-                    # k-level (if any remain)
-                    if leaf_scores:
-                        for j in range(J):
-                            try:
-                                K = len(prim.op[j].op)
-                                for k in range(K):
-                                    if leaf_scores:
-                                        prim.op[j].op[k].zero_cost_proxy = float(
-                                            leaf_scores.pop(0)
-                                        )
-                            except AttributeError:
-                                continue
-                except AttributeError:
-                    # Simple primitive without children
-                    if leaf_scores:
-                        prim.zero_cost_proxy = float(leaf_scores.pop(0))
-
-                # Set primitive-level score if present
-                if prim_score is not None:
+        # Then (optionally) set primitive-level score by its module name
+        for entry in scores:
+            prim_name = entry.get("primitive_module", None)
+            prim_score = entry.get("primitive_score", None)
+            if prim_name is not None and prim_score is not None:
+                mod = name_to_mod.get(prim_name, None)
+                if mod is not None:
                     try:
-                        prim.zero_cost_proxy = float(prim_score)
+                        setattr(mod, "zero_cost_proxy", float(prim_score))
                     except Exception as e:
-                        logger.debug("Failed assigning primitive-level ZCP: %s", e)
-
-                if leaf_scores:
-                    logger.warning(
-                        "Unconsumed leaf_scores remain for a primitive; JSON and graph structure may differ."
-                    )
+                        logger.debug("Assign prim ZCP failed for %s: %s", prim_name, e)
 
         logger.info(
-            "Loaded and applied precomputed per-op ZCPs from %s (normalized=%s)",
-            fname,
-            normalized,
+            "Loaded and applied precomputed per-op ZCPs by module names from %s", fname
         )
         self._zcp_compute_time = 0.0
         return True

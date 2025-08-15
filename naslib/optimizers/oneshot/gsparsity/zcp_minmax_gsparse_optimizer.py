@@ -78,6 +78,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.zcp_method = config.search.zcp_method
         self.train_loader = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.best_arch = None
 
     def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
         op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
@@ -336,7 +337,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 )
                 edge.data.op[i].register_parameter("weight", weight)
 
-    def adapt_search_space(self, search_space, scope=None, train_loader=None, **kwargs):
+    def adapt_search_space(
+        self, search_space, scope=None, train_loader=None, dataset_api=None, **kwargs
+    ):
         """
         Modify the search space to fit the optimizer's needs,
         e.g. discretize, add alpha flag and shared weight parameter, ...
@@ -347,6 +350,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         self.search_space = search_space
         self.train_loader = train_loader
+        self.dataset_api = dataset_api
         graph = search_space.clone()
 
         # If there is no scope defined, let's use the search space default one
@@ -393,8 +397,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             normalization_exponent=self.normalization_exponent,
         )
 
-        # Calculate ZCP scores once after shape annotation
-        self._calculate_and_set_zcp_scores(self.graph, self.scope)
+        # # Calculate ZCP scores once after shape annotation
+        # self._calculate_and_set_zcp_scores(self.graph, self.scope)
 
         self.graph.train()
         self.graph = graph
@@ -448,6 +452,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         graph = self.graph.clone().unparse()
         graph.prepare_discretization()
         normalization_exponent = self.normalization_exponent
+
+        # Recalculate ZCP scores at the beginning of each epoch
+        self._calculate_and_set_zcp_scores(self.graph, self.scope)
 
         def update_l2_weights(edge):
             """
@@ -630,15 +637,30 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
     def test_statistics(self):
         """
-        Return anytime test statistics if provided by the optimizer
+        Return anytime test statistics if provided by the optimizer.
+        On the last epoch, this will compute and store the final architecture.
         """
         # nb301 is not there but we use it anyways to generate the arch strings.
         # if self.graph.QUERYABLE:
         try:
             # record anytime performance
-            best_arch = self.get_final_architecture()
-            return best_arch.query(Metric.TEST_ACCURACY, self.dataset)
-        except:
+            self.best_arch = self.get_final_architecture()
+            return (
+                self.best_arch.query(
+                    Metric.TEST_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.VAL_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.TRAIN_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.TRAIN_TIME, self.dataset, dataset_api=self.dataset_api
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to query anytime performance: {e}")
             return None
 
     def before_training(self):
@@ -656,6 +678,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         Just log the l2 norms of operation weights.
         """
+        # Recalculate ZCP scores at the beginning of each epoch
+        self._calculate_and_set_zcp_scores(self.graph, self.scope)
+
         normalization_exponent = self.normalization_exponent
 
         def update_l2_weights(edge):
@@ -808,8 +833,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
     def after_training(self):
         print("save path: ", self.config.save)
-        best_arch = self.get_final_architecture()
-        logger.info("Final architecture after search:\n" + best_arch.modules_str())
+        if not self.best_arch:
+            logger.info(
+                "Best arch not computed during last epoch's test_statistics. Computing now."
+            )
+            self.best_arch = self.get_final_architecture()
+
+        logger.info("Final architecture after search:\n" + self.best_arch.modules_str())
 
     def get_op_optimizer(self):
         """

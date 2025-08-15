@@ -71,6 +71,7 @@ class GSparseOptimizer(MetaOptimizer):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )  #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
+        self.best_arch = None
 
     @staticmethod
     def update_ops(edge):
@@ -123,7 +124,7 @@ class GSparseOptimizer(MetaOptimizer):
                 )
                 edge.data.op[i].register_parameter("weight", weight)
 
-    def adapt_search_space(self, search_space, scope=None, **kwargs):
+    def adapt_search_space(self, search_space, scope=None, dataset_api=None, **kwargs):
         """
         Modify the search space to fit the optimizer's needs,
         e.g. discretize, add alpha flag and shared weight parameter, ...
@@ -133,6 +134,7 @@ class GSparseOptimizer(MetaOptimizer):
                 should be optimized by the optimizer.
         """
         self.search_space = search_space
+        self.dataset_api = dataset_api
         graph = search_space.clone()
 
         # If there is no scope defined, let's use the search space default one
@@ -356,15 +358,30 @@ class GSparseOptimizer(MetaOptimizer):
 
     def test_statistics(self):
         """
-        Return anytime test statistics if provided by the optimizer
+        Return anytime test statistics if provided by the optimizer.
+        On the last epoch, this will compute and store the final architecture.
         """
         # nb301 is not there but we use it anyways to generate the arch strings.
         # if self.graph.QUERYABLE:
         try:
             # record anytime performance
-            best_arch = self.get_final_architecture()
-            return best_arch.query(Metric.TEST_ACCURACY, self.dataset)
-        except:
+            self.best_arch = self.get_final_architecture()
+            return (
+                self.best_arch.query(
+                    Metric.TEST_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.VAL_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.TRAIN_ACCURACY, self.dataset, dataset_api=self.dataset_api
+                ),
+                self.best_arch.query(
+                    Metric.TRAIN_TIME, self.dataset, dataset_api=self.dataset_api
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to query anytime performance: {e}")
             return None
 
     def before_training(self):
@@ -490,8 +507,13 @@ class GSparseOptimizer(MetaOptimizer):
 
     def after_training(self):
         print("save path: ", self.config.save)
-        best_arch = self.get_final_architecture()
-        logger.info("Final architecture after search:\n" + best_arch.modules_str())
+        if not self.best_arch:
+            logger.info(
+                "Best arch not computed during last epoch's test_statistics. Computing now."
+            )
+            self.best_arch = self.get_final_architecture()
+
+        logger.info("Final architecture after search:\n" + self.best_arch.modules_str())
 
     def get_op_optimizer(self):
         """

@@ -431,7 +431,9 @@ class Trainer(object):
                 self.search_trajectory.queried_test_acc.append(test_acc)
                 self.search_trajectory.queried_val_acc.append(val_acc)
                 self.search_trajectory.queried_train_acc.append(train_acc)
-                self.search_trajectory.queried_train_time.append(scaled_train_time)
+                self.search_trajectory.scaled_queried_train_time.append(
+                    scaled_train_time
+                )
                 logger.info(
                     "Epoch {}, Queried expanded anytime results: Test Acc: {:.5f}, Val Acc: {:.5f}, Train Acc: {:.5f}, Scaled Train Time: {:.5f}".format(
                         e, test_acc, val_acc, train_acc, scaled_train_time

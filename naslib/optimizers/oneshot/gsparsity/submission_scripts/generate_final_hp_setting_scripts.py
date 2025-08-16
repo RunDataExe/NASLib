@@ -296,7 +296,7 @@ def build_command(
         f"--dataset {dataset}",
         f"--seed {seed}",
         f"--resume {resume}",
-        f"--out_dir {out_dir}",
+        f'--out_dir "{out_dir}"',
         f"--dataset_subset {dataset_subset}",
     ]
     if zcp_method and "zcp" in optimizer:
@@ -319,6 +319,7 @@ def write_slurm_script(
     seed: int,
     cmd: str,
     zcp_method: Optional[str] = None,
+    results_out_dir: str = "naslib/optimizers/oneshot/gsparsity/result_final_hp",
 ) -> str:
     job_suffix = f"_{zcp_method}" if zcp_method else ""
     job_name = f"final_hp_{optimizer}_{dataset}_{seed}{job_suffix}"
@@ -333,6 +334,17 @@ def write_slurm_script(
 
     with open(fpath, "w") as f:
         f.write(SLURM_HEADER.format(job_name=job_name, slurm_log_dir=SLURM_LOG_DIR))
+
+        # Pre-run: use node-local scratch and always sync back on exit
+        f.write(
+            'OUT_DIR_LOCAL="${SLURM_TMPDIR:-/tmp}/naslib_results"\n'
+            f'OUT_DIR_DEST="{results_out_dir}"\n'
+            'mkdir -p "$OUT_DIR_LOCAL"\n'
+            'mkdir -p "$OUT_DIR_DEST"\n'
+            'trap \'echo "[Slurm] Syncing results to $OUT_DIR_DEST"; rsync -a "$OUT_DIR_LOCAL"/ "$OUT_DIR_DEST"/\' EXIT\n\n'
+        )
+
+        # Main command
         f.write(cmd)
 
     return fpath
@@ -397,12 +409,13 @@ def main():
             )
 
             for seed in seeds_to_emit:
+                # Route outputs to node-local scratch; trap will rsync to DEST
                 cmd = build_command(
                     optimizer=optimizer,
                     search_space=search_space,
                     dataset=dataset,
                     seed=seed,
-                    out_dir=args.results_out_dir,
+                    out_dir="$OUT_DIR_LOCAL",
                     dataset_subset=args.dataset_subset,
                     resume=args.resume,
                     overrides=overrides,
@@ -417,6 +430,7 @@ def main():
                     seed=seed,
                     cmd=cmd,
                     zcp_method=zcp_method,
+                    results_out_dir=args.results_out_dir,
                 )
                 generated.append(script_path)
 

@@ -24,6 +24,10 @@ from naslib.optimizers import (
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
+from naslib.optimizers.oneshot.gsparsity.random_search_optimizer import (
+    RandomSearch,
+)
+
 #!!!!!!!
 from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
     ZCP_GSparseOptimizer,

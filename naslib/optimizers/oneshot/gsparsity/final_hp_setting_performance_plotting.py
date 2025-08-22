@@ -223,61 +223,389 @@ def plot_anytime_performance(
     seed_to_marker = {
         seed: MARKERS[i % len(MARKERS)] for i, seed in enumerate(all_seeds)
     }
-    if combine_plots:
-        plt.figure(figsize=(14, 8))
-        ax = plt.gca()
-        if acc_metric == "valid_acc":
-            plot_title = f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
-        else:
-            plot_title = f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
-    else:
-        ax = None  # Will be created inside the loop
 
-    # Generate a plot for each group
-    for group_idx, ((optimizer, dataset, search_space), runs) in enumerate(
-        grouped_runs.items()
-    ):
-        if not combine_plots:
+    # Consistent color/line per optimizer across datasets
+    optimizers = sorted(set(opt for (opt, _, _) in grouped_runs.keys()))
+    opt_to_color = {opt: COLORS[i % len(COLORS)] for i, opt in enumerate(optimizers)}
+    opt_to_fmt = {opt: FMTS[i % len(FMTS)] for i, opt in enumerate(optimizers)}
+
+    if not combine_plots:
+        ax = None  # Will be created inside the loop
+        # Generate a plot for each group
+        for group_idx, ((optimizer, dataset, search_space), runs) in enumerate(
+            grouped_runs.items()
+        ):
             plt.figure(figsize=(12, 7))
             ax = plt.gca()
 
-        all_aucs = []
-        all_trajectories = []
-        all_valid_runs_meta = []  # Store metadata for valid runs
-        group_label = f"{optimizer}"
-        color = COLORS[group_idx % len(COLORS)]
-        fmt = FMTS[group_idx % len(FMTS)]
+            all_aucs = []
+            all_trajectories = []
+            all_valid_runs_meta = []  # Store metadata for valid runs
+            group_label = f"{optimizer}"
+            color = opt_to_color[optimizer]
+            fmt = opt_to_fmt[optimizer]
 
-        print(f"\nProcessing {optimizer} on {dataset} ({search_space})...")
+            print(f"\nProcessing {optimizer} on {dataset} ({search_space})...")
 
-        # Process runs and collect valid data first
-        for run_meta in runs:
-            time, acc, run_auc = process_run_data(run_meta["path"], acc_metric, dataset)
-            if time is None:
-                print(f"  - Skipping seed {run_meta['seed']} (no data).")
+            # Process runs and collect valid data first
+            for run_meta in runs:
+                time, acc, run_auc = process_run_data(
+                    run_meta["path"], acc_metric, dataset
+                )
+                if time is None:
+                    print(f"  - Skipping seed {run_meta['seed']} (no data).")
+                    continue
+
+                all_aucs.append(run_auc)
+                all_trajectories.append((time, acc))
+                all_valid_runs_meta.append(run_meta)
+
+            if not all_trajectories:
+                print("  - No valid data for this group. Skipping plot.")
+                if not combine_plots:
+                    plt.close()
                 continue
 
-            all_aucs.append(run_auc)
-            all_trajectories.append((time, acc))
-            all_valid_runs_meta.append(run_meta)
+            # Generate shades for individual seed runs
+            num_seeds = len(all_trajectories)
+            seed_colors = get_color_shades(color, num_seeds)
 
-        if not all_trajectories:
-            print("  - No valid data for this group. Skipping plot.")
+            # Create a common time grid for interpolation for all lines (mean and seeds)
+            max_time = (
+                max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
+            )
+            time_grid = np.linspace(0, max_time, 500)
+
+            # Plot individual runs from the collected valid data
             if not combine_plots:
+                # For individual plots, label each seed clearly
+                for i, (time, acc) in enumerate(all_trajectories):
+                    run_meta = all_valid_runs_meta[i]
+                    marker = seed_to_marker.get(run_meta["seed"], "x")
+
+                    # Interpolate seed data for a smooth curve
+                    unique_indices = np.unique(time, return_index=True)[1]
+                    interp_acc = np.interp(
+                        time_grid, time[unique_indices], acc[unique_indices]
+                    )
+
+                    # Adjust marker size and width based on the marker type
+                    current_markersize = 8 if marker == "+" else 5
+                    current_markeredgewidth = (
+                        2 if marker == "+" else 1
+                    )  # Make '+' thicker
+
+                    # --- Split plot for interpolated vs. real data ---
+                    first_real_time = time[1]
+                    split_idx = np.searchsorted(time_grid, first_real_time)
+
+                    # Plot the "estimated" part (lighter)
+                    ax.plot(
+                        time_grid[: split_idx + 1],
+                        interp_acc[: split_idx + 1],
+                        color=seed_colors[i],
+                        alpha=0.2,  # Lighter
+                        linestyle=":",
+                        label=None,  # No legend entry for the line itself
+                    )
+                    # Plot the "real" part (heavier)
+                    ax.plot(
+                        time_grid[split_idx:],
+                        interp_acc[split_idx:],
+                        color=seed_colors[i],
+                        alpha=0.9,  # Heavier
+                        linestyle=":",
+                        label=None,  # No extra legend entry
+                    )
+
+                    # Overlay the original data points as markers
+                    ax.plot(
+                        time[1:],  # Exclude the t=0 random guess point
+                        acc[1:],
+                        linestyle="None",  # No line connecting markers
+                        marker=marker,
+                        color=seed_colors[i],
+                        markersize=current_markersize,
+                        markeredgewidth=current_markeredgewidth,
+                        alpha=0.9,
+                        label=None,  # No extra legend entry
+                    )
+            else:
+                # For combined plot, use method-specific colors for seeds, but a single legend entry
+                for i, (time, acc) in enumerate(all_trajectories):
+                    run_meta = all_valid_runs_meta[i]
+                    marker = seed_to_marker.get(run_meta["seed"], "x")
+
+                    # Interpolate seed data for a smooth curve
+                    unique_indices = np.unique(time, return_index=True)[1]
+                    interp_acc = np.interp(
+                        time_grid, time[unique_indices], acc[unique_indices]
+                    )
+
+                    # Adjust marker size and width for '+'
+                    current_markersize = 8 if marker == "+" else 5
+                    current_markeredgewidth = 2 if marker == "+" else 1
+
+                    # --- Split plot for interpolated vs. real data ---
+                    first_real_time = time[1]
+                    split_idx = np.searchsorted(time_grid, first_real_time)
+
+                    # Plot the "estimated" part (lighter)
+                    ax.plot(
+                        time_grid[: split_idx + 1],
+                        interp_acc[: split_idx + 1],
+                        color=seed_colors[i],
+                        alpha=0.2,  # Lighter
+                        linestyle=":",
+                        linewidth=1.2,
+                        label=None,
+                    )
+                    # Plot the "real" part (heavier)
+                    ax.plot(
+                        time_grid[split_idx:],
+                        interp_acc[split_idx:],
+                        color=seed_colors[i],
+                        alpha=0.9,  # Heavier
+                        linestyle=":",
+                        linewidth=1.2,
+                        label=None,
+                    )
+
+                    # Overlay the original data points as markers
+                    ax.plot(
+                        time[1:],  # Exclude the t=0 random guess point
+                        acc[1:],
+                        linestyle="None",
+                        marker=marker,
+                        color=seed_colors[i],
+                        markersize=current_markersize,
+                        markeredgewidth=current_markeredgewidth,
+                        alpha=0.7,
+                        label=None,
+                    )
+
+            # --- Aggregation and Mean Plot ---
+            # Create a common time grid for interpolation
+            if (
+                not all_trajectories
+            ):  # Recalculate max_time if needed, though it should exist
+                max_time = 0
+            else:
+                max_time = max(t[-1] for t, a in all_trajectories)
+            time_grid = np.linspace(0, max_time, 500)
+
+            interpolated_accs = []
+            for time, acc in all_trajectories:
+                # Ensure time is monotonically increasing for interpolation
+                unique_indices = np.unique(time, return_index=True)[1]
+                interp_acc = np.interp(
+                    time_grid, time[unique_indices], acc[unique_indices]
+                )
+                interpolated_accs.append(interp_acc)
+
+            mean_acc = np.mean(interpolated_accs, axis=0)
+            std_acc = np.std(interpolated_accs, axis=0)
+
+            # --- AUC Reporting ---
+            mean_auc = np.mean(all_aucs)
+            std_auc = np.std(all_aucs)
+            print(f"  - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
+            for i, run_auc in enumerate(all_aucs):
+                print(f"    - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
+
+            # --- Plotting Mean and Std Dev ---
+            # Construct the label for the legend
+            num_seeds = len(all_trajectories)
+            mean_label = f"{group_label}"
+            if show_auc_text:
+                mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
+
+            # --- Split mean plot for interpolated vs. real data ---
+            # Find the average time of the first real data point to split the mean plot
+            first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
+            if first_real_times:
+                avg_first_real_time = np.mean(first_real_times)
+                mean_split_idx = np.searchsorted(time_grid, avg_first_real_time)
+            else:
+                mean_split_idx = 0  # Default to no split if no data
+
+            # Plot the "estimated" part of the mean (lighter)
+            ax.plot(
+                time_grid[: mean_split_idx + 1],
+                mean_acc[: mean_split_idx + 1],
+                color=color,
+                linestyle=fmt,
+                linewidth=2.5,
+                alpha=0.5,  # Lighter mean line
+                label=None,  # Label moved to the 'real' part
+            )
+            # Plot the "real" part of the mean (heavier)
+            ax.plot(
+                time_grid[mean_split_idx:],
+                mean_acc[mean_split_idx:],
+                color=color,
+                linestyle=fmt,
+                linewidth=2.5,
+                alpha=1.0,  # Heavier mean line
+                label=mean_label,
+            )
+
+            # Split the std. dev. fill to match the mean line's alpha
+            ax.fill_between(
+                time_grid[: mean_split_idx + 1],
+                (mean_acc - std_acc)[: mean_split_idx + 1],
+                (mean_acc + std_acc)[: mean_split_idx + 1],
+                color=color,
+                alpha=0.1,  # Lighter fill
+                label=None,
+            )
+            ax.fill_between(
+                time_grid[mean_split_idx:],
+                (mean_acc - std_acc)[mean_split_idx:],
+                (mean_acc + std_acc)[mean_split_idx:],
+                color=color,
+                alpha=0.2,  # Heavier fill
+                label=None,
+            )
+
+            if show_auc_fill:
+                ax.fill_between(
+                    time_grid, 0, mean_acc, color=color, alpha=0.1, label=None
+                )
+
+            # --- Final Plot Configuration (for individual plots) ---
+            if not combine_plots:
+                from matplotlib.lines import Line2D
+                from matplotlib.patches import Patch
+
+                # Get existing handles and labels (should just be the mean line)
+                handles, labels = ax.get_legend_handles_labels()
+
+                # Create a handle for the standard deviation fill
+                std_dev_handle = Patch(facecolor=color, alpha=0.2, label="Std. Dev.")
+
+                # Create custom legend handles for each seed's marker
+                seed_handles = []
+                seed_labels = []
+                # Sort by seed number for consistent legend order
+                for run_meta in sorted(
+                    all_valid_runs_meta, key=lambda x: int(x["seed"])
+                ):
+                    seed = run_meta["seed"]
+                    marker = seed_to_marker.get(seed, "x")
+                    # Create a handle for each seed with the method's color
+                    seed_handles.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            linestyle="None",
+                            marker=marker,
+                            color=color,
+                            markersize=8,
+                        )
+                    )
+                    seed_labels.append(f"{seed}")
+
+                # Combine handles and create the legend in the desired order
+                ax.legend(
+                    handles=handles + [std_dev_handle] + seed_handles,
+                    labels=labels + ["Std. Dev."] + seed_labels,
+                    loc="upper left",
+                    ncol=1,  # vertical
+                )
+
+                ax.set_xlabel("Runtime (s) [Log Scale]")
+                if acc_metric == "valid_acc":
+                    ax.set_title(
+                        f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
+                    )
+                    ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
+                else:
+                    ax.set_title(
+                        f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
+                    )
+                    ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
+                ax.set_xscale("log")
+                ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+                ax.set_ylim(bottom=0)  # Start y-axis at 0
+                ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+                ax.grid(True, which="both", ls="-", alpha=0.5)
+
+                # Add AUC info to plot if requested - This is now handled by the legend
+                # if show_auc_text:
+                #     auc_text = f"Mean AUC: {mean_auc:.2f} ± {std_auc:.2f}"
+                #     plt.figtext(
+                #         0.5,
+                #         0.01,
+                #         auc_text,
+                #         ha="center",
+                #         fontsize=10,
+                #         bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
+                #     )
+
+                filename = (
+                    f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+                )
+                save_path = os.path.join(output_dir, filename)
+                plt.savefig(save_path, bbox_inches="tight")
                 plt.close()
-            continue
+                print(f"  - Plot saved to {save_path}")
+        return
 
-        # Generate shades for individual seed runs
-        num_seeds = len(all_trajectories)
-        seed_colors = get_color_shades(color, num_seeds)
+    # --- Combined mode: one figure per dataset ---
+    datasets = sorted(set(f["dataset"] for f in files))
+    for dataset in datasets:
+        print(f"\nCreating combined plot for dataset: {dataset}")
+        fig = plt.figure(figsize=(14, 8))
+        ax = plt.gca()
 
-        # Create a common time grid for interpolation for all lines (mean and seeds)
-        max_time = max(t[-1] for t, a in all_trajectories) if all_trajectories else 0
-        time_grid = np.linspace(0, max_time, 500)
+        # Collect groups of this dataset only
+        ds_groups = [
+            ((optimizer, ds, search_space), runs)
+            for ((optimizer, ds, search_space), runs) in grouped_runs.items()
+            if ds == dataset
+        ]
 
-        # Plot individual runs from the collected valid data
-        if not combine_plots:
-            # For individual plots, label each seed clearly
+        # Keep track for legend handles later
+        all_handles = []
+        all_labels = []
+
+        # Process each optimizer group for this dataset
+        for (optimizer, ds, search_space), runs in ds_groups:
+            all_aucs = []
+            all_trajectories = []
+            all_valid_runs_meta = []
+            group_label = f"{optimizer}"
+            color = opt_to_color[optimizer]
+            fmt = opt_to_fmt[optimizer]
+
+            print(f"  Processing {optimizer} on {dataset} ({search_space})...")
+
+            # Process runs and collect valid data first
+            for run_meta in runs:
+                time, acc, run_auc = process_run_data(
+                    run_meta["path"], acc_metric, dataset
+                )
+                if time is None:
+                    print(f"    - Skipping seed {run_meta['seed']} (no data).")
+                    continue
+                all_aucs.append(run_auc)
+                all_trajectories.append((time, acc))
+                all_valid_runs_meta.append(run_meta)
+
+            if not all_trajectories:
+                print("    - No valid data for this group. Skipping.")
+                continue
+
+            # Generate shades for individual seed runs
+            num_seeds = len(all_trajectories)
+            seed_colors = get_color_shades(color, num_seeds)
+
+            # Common time grid
+            max_time = max(t[-1] for t, a in all_trajectories)
+            time_grid = np.linspace(0, max_time, 500)
+
+            # Plot individual runs (combined style)
             for i, (time, acc) in enumerate(all_trajectories):
                 run_meta = all_valid_runs_meta[i]
                 marker = seed_to_marker.get(run_meta["seed"], "x")
@@ -288,89 +616,36 @@ def plot_anytime_performance(
                     time_grid, time[unique_indices], acc[unique_indices]
                 )
 
-                # Adjust marker size and width based on the marker type
-                current_markersize = 8 if marker == "+" else 5
-                current_markeredgewidth = 2 if marker == "+" else 1  # Make '+' thicker
-
-                # --- Split plot for interpolated vs. real data ---
-                first_real_time = time[1]
-                split_idx = np.searchsorted(time_grid, first_real_time)
-
-                # Plot the "estimated" part (lighter)
-                ax.plot(
-                    time_grid[: split_idx + 1],
-                    interp_acc[: split_idx + 1],
-                    color=seed_colors[i],
-                    alpha=0.2,  # Lighter
-                    linestyle=":",
-                    label=None,  # No legend entry for the line itself
-                )
-                # Plot the "real" part (heavier)
-                ax.plot(
-                    time_grid[split_idx:],
-                    interp_acc[split_idx:],
-                    color=seed_colors[i],
-                    alpha=0.9,  # Heavier
-                    linestyle=":",
-                    label=None,  # No extra legend entry
-                )
-
-                # Overlay the original data points as markers
-                ax.plot(
-                    time[1:],  # Exclude the t=0 random guess point
-                    acc[1:],
-                    linestyle="None",  # No line connecting markers
-                    marker=marker,
-                    color=seed_colors[i],
-                    markersize=current_markersize,
-                    markeredgewidth=current_markeredgewidth,
-                    alpha=0.9,
-                    label=None,  # No extra legend entry
-                )
-        else:
-            # For combined plot, use method-specific colors for seeds, but a single legend entry
-            for i, (time, acc) in enumerate(all_trajectories):
-                run_meta = all_valid_runs_meta[i]
-                marker = seed_to_marker.get(run_meta["seed"], "x")
-
-                # Interpolate seed data for a smooth curve
-                unique_indices = np.unique(time, return_index=True)[1]
-                interp_acc = np.interp(
-                    time_grid, time[unique_indices], acc[unique_indices]
-                )
-
-                # Adjust marker size and width for '+'
+                # Marker styling
                 current_markersize = 8 if marker == "+" else 5
                 current_markeredgewidth = 2 if marker == "+" else 1
 
-                # --- Split plot for interpolated vs. real data ---
                 first_real_time = time[1]
                 split_idx = np.searchsorted(time_grid, first_real_time)
 
-                # Plot the "estimated" part (lighter)
+                # Estimated part
                 ax.plot(
                     time_grid[: split_idx + 1],
                     interp_acc[: split_idx + 1],
                     color=seed_colors[i],
-                    alpha=0.2,  # Lighter
+                    alpha=0.2,
                     linestyle=":",
                     linewidth=1.2,
                     label=None,
                 )
-                # Plot the "real" part (heavier)
+                # Real part
                 ax.plot(
                     time_grid[split_idx:],
                     interp_acc[split_idx:],
                     color=seed_colors[i],
-                    alpha=0.9,  # Heavier
+                    alpha=0.9,
                     linestyle=":",
                     linewidth=1.2,
                     label=None,
                 )
-
-                # Overlay the original data points as markers
+                # Markers
                 ax.plot(
-                    time[1:],  # Exclude the t=0 random guess point
+                    time[1:],
                     acc[1:],
                     linestyle="None",
                     marker=marker,
@@ -381,182 +656,85 @@ def plot_anytime_performance(
                     label=None,
                 )
 
-        # --- Aggregation and Mean Plot ---
-        # Create a common time grid for interpolation
-        if (
-            not all_trajectories
-        ):  # Recalculate max_time if needed, though it should exist
-            max_time = 0
-        else:
-            max_time = max(t[-1] for t, a in all_trajectories)
-        time_grid = np.linspace(0, max_time, 500)
-
-        interpolated_accs = []
-        for time, acc in all_trajectories:
-            # Ensure time is monotonically increasing for interpolation
-            unique_indices = np.unique(time, return_index=True)[1]
-            interp_acc = np.interp(time_grid, time[unique_indices], acc[unique_indices])
-            interpolated_accs.append(interp_acc)
-
-        mean_acc = np.mean(interpolated_accs, axis=0)
-        std_acc = np.std(interpolated_accs, axis=0)
-
-        # --- AUC Reporting ---
-        mean_auc = np.mean(all_aucs)
-        std_auc = np.std(all_aucs)
-        print(f"  - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
-        for i, run_auc in enumerate(all_aucs):
-            print(f"    - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
-
-        # --- Plotting Mean and Std Dev ---
-        # Construct the label for the legend
-        num_seeds = len(all_trajectories)
-        mean_label = f"{group_label}"
-        if show_auc_text:
-            mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
-
-        # --- Split mean plot for interpolated vs. real data ---
-        # Find the average time of the first real data point to split the mean plot
-        first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
-        if first_real_times:
-            avg_first_real_time = np.mean(first_real_times)
-            mean_split_idx = np.searchsorted(time_grid, avg_first_real_time)
-        else:
-            mean_split_idx = 0  # Default to no split if no data
-
-        # Plot the "estimated" part of the mean (lighter)
-        ax.plot(
-            time_grid[: mean_split_idx + 1],
-            mean_acc[: mean_split_idx + 1],
-            color=color,
-            linestyle=fmt,
-            linewidth=2.5,
-            alpha=0.5,  # Lighter mean line
-            label=None,  # Label moved to the 'real' part
-        )
-        # Plot the "real" part of the mean (heavier)
-        ax.plot(
-            time_grid[mean_split_idx:],
-            mean_acc[mean_split_idx:],
-            color=color,
-            linestyle=fmt,
-            linewidth=2.5,
-            alpha=1.0,  # Heavier mean line
-            label=mean_label,
-        )
-
-        # Split the std. dev. fill to match the mean line's alpha
-        ax.fill_between(
-            time_grid[: mean_split_idx + 1],
-            (mean_acc - std_acc)[: mean_split_idx + 1],
-            (mean_acc + std_acc)[: mean_split_idx + 1],
-            color=color,
-            alpha=0.1,  # Lighter fill
-            label=None,
-        )
-        ax.fill_between(
-            time_grid[mean_split_idx:],
-            (mean_acc - std_acc)[mean_split_idx:],
-            (mean_acc + std_acc)[mean_split_idx:],
-            color=color,
-            alpha=0.2,  # Heavier fill
-            label=None,
-        )
-
-        if show_auc_fill:
-            ax.fill_between(time_grid, 0, mean_acc, color=color, alpha=0.1, label=None)
-
-        # --- Final Plot Configuration (for individual plots) ---
-        if not combine_plots:
-            from matplotlib.lines import Line2D
-            from matplotlib.patches import Patch
-
-            # Get existing handles and labels (should just be the mean line)
-            handles, labels = ax.get_legend_handles_labels()
-
-            # Create a handle for the standard deviation fill
-            std_dev_handle = Patch(facecolor=color, alpha=0.2, label="Std. Dev.")
-
-            # Create custom legend handles for each seed's marker
-            seed_handles = []
-            seed_labels = []
-            # Sort by seed number for consistent legend order
-            for run_meta in sorted(all_valid_runs_meta, key=lambda x: int(x["seed"])):
-                seed = run_meta["seed"]
-                marker = seed_to_marker.get(seed, "x")
-                # Create a handle for each seed with the method's color
-                seed_handles.append(
-                    Line2D(
-                        [0],
-                        [0],
-                        linestyle="None",
-                        marker=marker,
-                        color=color,
-                        markersize=8,
-                    )
+            # Mean and std on common grid
+            interpolated_accs = []
+            for time, acc in all_trajectories:
+                unique_indices = np.unique(time, return_index=True)[1]
+                interp_acc = np.interp(
+                    time_grid, time[unique_indices], acc[unique_indices]
                 )
-                seed_labels.append(f"{seed}")
+                interpolated_accs.append(interp_acc)
 
-            # Combine handles and create the legend in the desired order
-            ax.legend(
-                handles=handles + [std_dev_handle] + seed_handles,
-                labels=labels + ["Std. Dev."] + seed_labels,
-                loc="upper left",
-                ncol=1,  # vertical
+            mean_acc = np.mean(interpolated_accs, axis=0)
+            std_acc = np.std(interpolated_accs, axis=0)
+
+            mean_auc = np.mean(all_aucs)
+            std_auc = np.std(all_aucs)
+            print(f"    - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
+            for i, run_auc in enumerate(all_aucs):
+                print(f"      - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
+
+            first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
+            mean_split_idx = (
+                np.searchsorted(time_grid, np.mean(first_real_times))
+                if first_real_times
+                else 0
             )
 
-            ax.set_xlabel("Runtime (s) [Log Scale]")
-            if acc_metric == "valid_acc":
-                ax.set_title(
-                    f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
-                )
-                ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
-            else:
-                ax.set_title(
-                    f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
-                )
-                ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
-            ax.set_xscale("log")
-            ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
-            ax.set_ylim(bottom=0)  # Start y-axis at 0
-            ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
-            ax.grid(True, which="both", ls="-", alpha=0.5)
+            mean_label = f"{group_label}"
+            if show_auc_text:
+                mean_label += f" | AUC: {mean_auc:.2f} ± {std_auc:.2f}"
 
-            # Add AUC info to plot if requested - This is now handled by the legend
-            # if show_auc_text:
-            #     auc_text = f"Mean AUC: {mean_auc:.2f} ± {std_auc:.2f}"
-            #     plt.figtext(
-            #         0.5,
-            #         0.01,
-            #         auc_text,
-            #         ha="center",
-            #         fontsize=10,
-            #         bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
-            #     )
-
-            filename = (
-                f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+            # Mean line (estimated + real)
+            ax.plot(
+                time_grid[: mean_split_idx + 1],
+                mean_acc[: mean_split_idx + 1],
+                color=color,
+                linestyle=fmt,
+                linewidth=2.5,
+                alpha=0.5,
+                label=None,
             )
-            save_path = os.path.join(output_dir, filename)
-            plt.savefig(save_path, bbox_inches="tight")
-            plt.close()
-            print(f"  - Plot saved to {save_path}")
+            handle = ax.plot(
+                time_grid[mean_split_idx:],
+                mean_acc[mean_split_idx:],
+                color=color,
+                linestyle=fmt,
+                linewidth=2.5,
+                alpha=1.0,
+                label=mean_label,
+            )[0]
 
-    # --- Final Plot Configuration (for combined plot) ---
-    if combine_plots:
+            # Std fill (estimated + real)
+            ax.fill_between(
+                time_grid[: mean_split_idx + 1],
+                (mean_acc - std_acc)[: mean_split_idx + 1],
+                (mean_acc + std_acc)[: mean_split_idx + 1],
+                color=color,
+                alpha=0.1,
+                label=None,
+            )
+            ax.fill_between(
+                time_grid[mean_split_idx:],
+                (mean_acc - std_acc)[mean_split_idx:],
+                (mean_acc + std_acc)[mean_split_idx:],
+                color=color,
+                alpha=0.2,
+                label=None,
+            )
+
+            if show_auc_fill:
+                ax.fill_between(time_grid, 0, mean_acc, color=color, alpha=0.1)
+
+        # Build legend (method lines + std + seed markers)
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
 
-        # Get existing handles and labels from the plot (these are the mean lines)
         handles, labels = ax.get_legend_handles_labels()
-
-        # Create a single, representative legend entry for standard deviation
         std_dev_handle = Patch(facecolor="gray", alpha=0.4, label="Std. Dev.")
 
-        # Create custom legend handles for each seed's marker, but in gray
         seed_handles = []
         seed_labels = []
-        # Use the global seed_to_marker map for a complete legend
         for seed, marker in sorted(seed_to_marker.items()):
             seed_handles.append(
                 Line2D(
@@ -570,31 +748,32 @@ def plot_anytime_performance(
             )
             seed_labels.append(f"{seed}")
 
-        # Combine handles and create the legend in the desired order
         ax.legend(
             handles=handles + [std_dev_handle] + seed_handles,
             labels=labels + ["Std. Dev."] + seed_labels,
             loc="upper left",
-            ncol=1,  # vertical
+            ncol=1,
         )
 
         ax.set_xlabel("Runtime (s) [Log Scale]")
         if acc_metric == "valid_acc":
             ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
+            plot_title = f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
         else:
             ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
+            plot_title = f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
         ax.set_title(plot_title)
         ax.set_xscale("log")
-        ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
-        ax.set_ylim(bottom=0)  # Start y-axis at 0
+        ax.set_xlim(left=1)
+        ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 
-        filename = f"combined_performance_plot_{acc_metric}.png"
+        filename = f"combined_performance_plot_{acc_metric}_{dataset}.png"
         save_path = os.path.join(output_dir, filename)
         plt.savefig(save_path, bbox_inches="tight")
         plt.close()
-        print(f"\nCombined plot saved to {save_path}")
+        print(f"Combined plot saved to {save_path}")
 
 
 def main():

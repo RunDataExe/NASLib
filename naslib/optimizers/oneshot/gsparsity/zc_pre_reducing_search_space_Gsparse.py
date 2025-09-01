@@ -191,12 +191,16 @@ class GSparseOptimizer(MetaOptimizer):
                         self.graph, op_indices, representation_type="op_indices"
                     )
 
-        elif getattr(self.config.search, "pre_computed_zc_scores") and os.path.exists(
-            (
-                getattr(self.config.search, "pre_computed_zc_scores")
-                + "_"
-                + self.config.dataset
-                + ".json"
+        elif (
+            hasattr(self.config.search, "pre_computed_zc_scores")
+            and getattr(self.config.search, "pre_computed_zc_scores")
+            and os.path.exists(
+                (
+                    getattr(self.config.search, "pre_computed_zc_scores")
+                    + "_"
+                    + self.config.dataset
+                    + ".json"
+                )
             )
         ):
             pre_computed_zc_scores_path = (

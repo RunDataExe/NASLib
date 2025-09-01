@@ -311,12 +311,16 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         self.graph, op_indices, representation_type="op_indices"
                     )
 
-        elif getattr(self.config.search, "pre_computed_zc_scores") and os.path.exists(
-            (
-                getattr(self.config.search, "pre_computed_zc_scores")
-                + "_"
-                + self.config.dataset
-                + ".json"
+        elif (
+            hasattr(self.config.search, "pre_computed_zc_scores")
+            and getattr(self.config.search, "pre_computed_zc_scores")
+            and os.path.exists(
+                (
+                    getattr(self.config.search, "pre_computed_zc_scores")
+                    + "_"
+                    + self.config.dataset
+                    + ".json"
+                )
             )
         ):
             pre_computed_zc_scores_path = (
@@ -370,13 +374,15 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 worst_params = np.argsort(param_scores)[:750]
 
                 # Log the results
-                logger.info(f"Worst 750 indices (jacov): {worst_jacov}")
-                logger.info(f"Worst 750 indices (synflow): {worst_synflow}")
-                logger.info(f"Worst 750 indices (params): {worst_params}")
+                logger.debug("Worst 750 indices (jacov) count: %d", len(worst_jacov))
+                logger.debug(
+                    "Worst 750 indices (synflow) count: %d", len(worst_synflow)
+                )
+                logger.debug("Worst 750 indices (params) count: %d", len(worst_params))
 
                 # Find common worst indices across all three metrics
                 worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
-                logger.info(f"Common worst indices: {sorted(worst_set)}")
+                logger.debug("Common worst indices count: %d", len(worst_set))
 
                 arch_list = [
                     list(op_indices) for op_indices in self.graph.get_arch_iterator()

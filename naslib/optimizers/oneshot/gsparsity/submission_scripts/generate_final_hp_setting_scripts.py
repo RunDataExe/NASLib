@@ -5,6 +5,7 @@ import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import optuna
+from optuna.trial import TrialState  # added
 
 SLURM_LOG_DIR = "naslib/optimizers/oneshot/gsparsity/result_final_hp/slurm"
 
@@ -161,6 +162,155 @@ def list_studies_in_db(db_path: str) -> List[optuna.study.StudySummary]:
 
 def open_study(storage: str, study_name: str) -> optuna.study.Study:
     return optuna.load_study(study_name=study_name, storage=storage)
+
+
+# --- New helpers for selecting trials including PRUNED while respecting highest budget and internal_early_stopped ---
+
+
+def _trial_budget(t: optuna.trial.FrozenTrial) -> int:
+    """
+    Return the intended budget for a trial.
+    Prefers user_attrs['budget'] set by the configurator; otherwise falls back
+    to the last reported step (or 0 if unknown).
+    """
+    b = t.user_attrs.get("budget")
+    if isinstance(b, (int, float)):
+        return int(b)
+    # fallback: last reported step
+    if t.last_step is not None:
+        return int(t.last_step)
+    if t.intermediate_values:
+        return int(max(t.intermediate_values.keys()))
+    return 0
+
+
+def _trial_score(t: optuna.trial.FrozenTrial) -> Optional[float]:
+    """
+    For COMPLETE trials: use final value.
+    For PRUNED trials: use the last reported intermediate value.
+    Returns None if no comparable score is available.
+    """
+    if t.state == TrialState.COMPLETE:
+        return t.value
+    if t.state == TrialState.PRUNED:
+        if t.last_step is not None and t.last_step in t.intermediate_values:
+            return t.intermediate_values[t.last_step]
+        # fallback if last_step missing but intermediate values exist
+        if t.intermediate_values:
+            last_step = max(t.intermediate_values.keys())
+            return t.intermediate_values[last_step]
+    return None
+
+
+def _trial_score_highest_val_acc(t: optuna.trial.FrozenTrial) -> Optional[float]:
+    """
+    Returns the highest validation accuracy for a trial:
+    - For COMPLETE: use t.value.
+    - For PRUNED: use the last reported intermediate value.
+    Returns None if not available.
+    """
+    if t.state == TrialState.COMPLETE:
+        return t.value
+    if t.state == TrialState.PRUNED:
+        if t.last_step is not None and t.last_step in t.intermediate_values:
+            return t.intermediate_values[t.last_step]
+        if t.intermediate_values:
+            last_step = max(t.intermediate_values.keys())
+            return t.intermediate_values[last_step]
+    return None
+
+
+def select_best_trial_including_pruned(
+    study: optuna.study.Study,
+) -> optuna.trial.FrozenTrial:
+    """
+    Select the best trial considering COMPLETE and PRUNED trials:
+    - Exclude trials with user_attrs['internal_early_stopped'] == True.
+    - Group by budget (highest first).
+    - Within the highest budget group, choose the trial with the best score.
+      Score is trial.value for COMPLETE, and last intermediate value for PRUNED.
+    - If no trial in a budget group has a score, fall back to next budget.
+    - If nothing matches, raise ValueError.
+    """
+    trials = study.get_trials(
+        deepcopy=False,
+        states=[TrialState.COMPLETE, TrialState.PRUNED],
+    )
+
+    # Filter out internal early-stopped
+    candidates = [
+        t for t in trials if not t.user_attrs.get("internal_early_stopped", False)
+    ]
+    if not candidates:
+        raise ValueError("No eligible trials (after filtering internal_early_stopped).")
+
+    # Organize by budget, highest first
+    by_budget: Dict[int, List[optuna.trial.FrozenTrial]] = {}
+    for t in candidates:
+        b = _trial_budget(t)
+        by_budget.setdefault(b, []).append(t)
+
+    for budget in sorted(by_budget.keys(), reverse=True):
+        bucket = by_budget[budget]
+        scored: List[Tuple[float, int, int, optuna.trial.FrozenTrial]] = []
+        # sort key tuple: (-score, state_pref, -last_step, -trial.number)
+        # where state_pref prefers COMPLETE (0) over PRUNED (1)
+        for t in bucket:
+            score = _trial_score(t)
+            if score is None:
+                continue
+            state_pref = 0 if t.state == TrialState.COMPLETE else 1
+            last_step = (
+                int(t.last_step)
+                if t.last_step is not None
+                else (
+                    max(t.intermediate_values.keys()) if t.intermediate_values else -1
+                )
+            )
+            scored.append((score, -state_pref, last_step, t.number, t))
+
+        if scored:
+            # maximize score, prefer COMPLETE (via -state_pref), prefer larger last_step, prefer larger trial number
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+            return scored[0][4]
+
+    # If we reach here, either no scores exist or everything was filtered out
+    raise ValueError(
+        "No trials with comparable scores found among COMPLETE/PRUNED candidates."
+    )
+
+
+def select_best_trial_highest_val_acc(
+    study: optuna.study.Study,
+) -> optuna.trial.FrozenTrial:
+    """
+    Select the trial with the highest validation accuracy (regardless of budget, trial number, or state).
+    Only consider trials that do NOT have user_attrs['internal_early_stopped'] == True.
+    """
+    trials = study.get_trials(
+        deepcopy=False,
+        states=[TrialState.COMPLETE, TrialState.PRUNED],
+    )
+    # Filter out internal early-stopped
+    candidates = [
+        t for t in trials if not t.user_attrs.get("internal_early_stopped", False)
+    ]
+    if not candidates:
+        raise ValueError("No eligible trials (after filtering internal_early_stopped).")
+
+    # Find the trial with the highest validation accuracy
+    best_trial = None
+    best_score = None
+    for t in candidates:
+        score = _trial_score_highest_val_acc(t)
+        if score is not None and (best_score is None or score > best_score):
+            best_score = score
+            best_trial = t
+
+    if best_trial is not None:
+        return best_trial
+
+    raise ValueError("No trials with comparable scores found among candidates.")
 
 
 def parse_study_identity(study_name: str) -> Tuple[str, str, str, int, Optional[str]]:
@@ -335,16 +485,9 @@ def write_slurm_script(
     with open(fpath, "w") as f:
         f.write(SLURM_HEADER.format(job_name=job_name, slurm_log_dir=SLURM_LOG_DIR))
 
-        # Pre-run: use node-local scratch and always sync back on exit
-        f.write(
-            'OUT_DIR_LOCAL="${SLURM_TMPDIR:-/tmp}/naslib_results"\n'
-            f'OUT_DIR_DEST="{results_out_dir}"\n'
-            'mkdir -p "$OUT_DIR_LOCAL"\n'
-            'mkdir -p "$OUT_DIR_DEST"\n'
-            'trap \'echo "[Slurm] Syncing results to $OUT_DIR_DEST"; rsync -a "$OUT_DIR_LOCAL"/ "$OUT_DIR_DEST"/\' EXIT\n\n'
-        )
-
-        # Main command
+        # Write directly to the persistent results directory (no local scratch)
+        # so checkpoints remain visible for resume across jobs.
+        # Just run the main command.
         f.write(cmd)
 
     return fpath
@@ -391,10 +534,10 @@ def main():
 
             try:
                 study = open_study(storage, study_name)
-                best = study.best_trial
+                best = select_best_trial_highest_val_acc(study)  # changed here
             except Exception as e:
                 print(
-                    f"[WARN] Skipping study (cannot load/best trial missing): {study_name} -> {e}",
+                    f"[WARN] Skipping study (cannot select best trial): {study_name} -> {e}",
                     file=sys.stderr,
                 )
                 continue
@@ -409,13 +552,13 @@ def main():
             )
 
             for seed in seeds_to_emit:
-                # Route outputs to node-local scratch; trap will rsync to DEST
+                # Write directly to persistent results directory (like wide HPO)
                 cmd = build_command(
                     optimizer=optimizer,
                     search_space=search_space,
                     dataset=dataset,
                     seed=seed,
-                    out_dir="$OUT_DIR_LOCAL",
+                    out_dir=args.results_out_dir,   # changed from "$OUT_DIR_LOCAL"
                     dataset_subset=args.dataset_subset,
                     resume=args.resume,
                     overrides=overrides,

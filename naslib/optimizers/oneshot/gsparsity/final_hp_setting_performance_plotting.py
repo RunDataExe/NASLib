@@ -98,6 +98,11 @@ def get_color_shades(base_color, n_shades):
     )
 
 
+def format_method_label(optimizer, zcp_method):
+    """Human-friendly label for legend."""
+    return f"{optimizer} ({zcp_method})" if zcp_method else f"{optimizer}"
+
+
 def find_error_files(root_dir):
     """Finds all 'errors.json' files and extracts metadata from their paths."""
     error_files = []
@@ -108,14 +113,16 @@ def find_error_files(root_dir):
             relative_path = os.path.relpath(full_path, root_dir)
             parts = relative_path.split(os.sep)
 
-            # Path structure: {optimizer}/{...}/{search_space}/{dataset}/{seed}/errors.json
+            # Expected structures (relative to root_dir):
+            # - With ZCP method: {optimizer}/{zcp_method}/{search_space}/{dataset}/{seed}/errors.json  -> len(parts) == 6
+            # - Without ZCP:     {optimizer}/{search_space}/{dataset}/{seed}/errors.json            -> len(parts) == 5
             if len(parts) >= 5:
                 optimizer = parts[0]
                 seed = parts[-2]
                 dataset = parts[-3]
                 search_space = parts[-4]
-                # Handle potential extra directories like zcp_method
-                zcp_method = parts[1] if "zcp" in optimizer and len(parts) > 5 else None
+                # Detect zcp_method when there is an extra component
+                zcp_method = parts[1] if len(parts) >= 6 else None
 
                 metadata = {
                     "path": full_path,
@@ -206,10 +213,10 @@ def plot_anytime_performance(
         print("No 'errors.json' files found. Exiting.")
         return
 
-    # Group runs by optimizer, dataset, and search space
+    # Group runs by optimizer, zcp_method (if any), dataset, and search space
     grouped_runs = defaultdict(list)
     for f in files:
-        key = (f["optimizer"], f["dataset"], f["search_space"])
+        key = (f["optimizer"], f.get("zcp_method"), f["dataset"], f["search_space"])
         grouped_runs[key].append(f)
 
     print(
@@ -224,28 +231,33 @@ def plot_anytime_performance(
         seed: MARKERS[i % len(MARKERS)] for i, seed in enumerate(all_seeds)
     }
 
-    # Consistent color/line per optimizer across datasets
-    optimizers = sorted(set(opt for (opt, _, _) in grouped_runs.keys()))
-    opt_to_color = {opt: COLORS[i % len(COLORS)] for i, opt in enumerate(optimizers)}
-    opt_to_fmt = {opt: FMTS[i % len(FMTS)] for i, opt in enumerate(optimizers)}
+    # Consistent color/line per (optimizer, zcp_method) across datasets
+    method_keys = sorted(set((opt, zcp) for (opt, zcp, _, _) in grouped_runs.keys()))
+    opt_to_color = {
+        (opt, zcp): COLORS[i % len(COLORS)] for i, (opt, zcp) in enumerate(method_keys)
+    }
+    opt_to_fmt = {
+        (opt, zcp): FMTS[i % len(FMTS)] for i, (opt, zcp) in enumerate(method_keys)
+    }
 
     if not combine_plots:
         ax = None  # Will be created inside the loop
         # Generate a plot for each group
-        for group_idx, ((optimizer, dataset, search_space), runs) in enumerate(
-            grouped_runs.items()
-        ):
+        for group_idx, (
+            (optimizer, zcp_method, dataset, search_space),
+            runs,
+        ) in enumerate(grouped_runs.items()):
             plt.figure(figsize=(12, 7))
             ax = plt.gca()
 
             all_aucs = []
             all_trajectories = []
             all_valid_runs_meta = []  # Store metadata for valid runs
-            group_label = f"{optimizer}"
-            color = opt_to_color[optimizer]
-            fmt = opt_to_fmt[optimizer]
+            group_label = format_method_label(optimizer, zcp_method)
+            color = opt_to_color[(optimizer, zcp_method)]
+            fmt = opt_to_fmt[(optimizer, zcp_method)]
 
-            print(f"\nProcessing {optimizer} on {dataset} ({search_space})...")
+            print(f"\nProcessing {group_label} on {dataset} ({search_space})...")
 
             # Process runs and collect valid data first
             for run_meta in runs:
@@ -517,12 +529,12 @@ def plot_anytime_performance(
                 ax.set_xlabel("Runtime (s) [Log Scale]")
                 if acc_metric == "valid_acc":
                     ax.set_title(
-                        f"Incumbent Anytime Validation Performance | {f['dataset'].upper()} | NAS-Bench-201"
+                        f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
                     )
                     ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
                 else:
                     ax.set_title(
-                        f"Incumbent Anytime Training Performance | {f['dataset'].upper()} | NAS-Bench-201"
+                        f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
                     )
                     ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
                 ax.set_xscale("log")
@@ -531,20 +543,10 @@ def plot_anytime_performance(
                 ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
                 ax.grid(True, which="both", ls="-", alpha=0.5)
 
-                # Add AUC info to plot if requested - This is now handled by the legend
-                # if show_auc_text:
-                #     auc_text = f"Mean AUC: {mean_auc:.2f} ± {std_auc:.2f}"
-                #     plt.figtext(
-                #         0.5,
-                #         0.01,
-                #         auc_text,
-                #         ha="center",
-                #         fontsize=10,
-                #         bbox={"facecolor": "white", "alpha": 0.5, "pad": 5},
-                #     )
-
                 filename = (
-                    f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+                    f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}"
+                    + (f"_{zcp_method}" if zcp_method else "")
+                    + ".png"
                 )
                 save_path = os.path.join(output_dir, filename)
                 plt.savefig(save_path, bbox_inches="tight")
@@ -561,8 +563,11 @@ def plot_anytime_performance(
 
         # Collect groups of this dataset only
         ds_groups = [
-            ((optimizer, ds, search_space), runs)
-            for ((optimizer, ds, search_space), runs) in grouped_runs.items()
+            ((optimizer, zcp_method, ds, search_space), runs)
+            for (
+                (optimizer, zcp_method, ds, search_space),
+                runs,
+            ) in grouped_runs.items()
             if ds == dataset
         ]
 
@@ -571,15 +576,15 @@ def plot_anytime_performance(
         all_labels = []
 
         # Process each optimizer group for this dataset
-        for (optimizer, ds, search_space), runs in ds_groups:
+        for (optimizer, zcp_method, ds, search_space), runs in ds_groups:
             all_aucs = []
             all_trajectories = []
             all_valid_runs_meta = []
-            group_label = f"{optimizer}"
-            color = opt_to_color[optimizer]
-            fmt = opt_to_fmt[optimizer]
+            group_label = format_method_label(optimizer, zcp_method)
+            color = opt_to_color[(optimizer, zcp_method)]
+            fmt = opt_to_fmt[(optimizer, zcp_method)]
 
-            print(f"  Processing {optimizer} on {dataset} ({search_space})...")
+            print(f"  Processing {group_label} on {dataset} ({search_space})...")
 
             # Process runs and collect valid data first
             for run_meta in runs:
@@ -783,6 +788,7 @@ def main():
     parser.add_argument(
         "--root_dir",
         type=str,
+        default="naslib/optimizers/oneshot/gsparsity/result_final_hp",
         help="The root directory containing the experiment runs (e.g., 'testv3/').",
     )
     parser.add_argument(

@@ -73,6 +73,7 @@ def main():
         "zcp_gsparsity",
         "zcp-pre_gsparsity",
         "zcp-pre_zcp_gsparsity",
+        "darts",
         # "inverted_bananas_gsparsity",
         # "inverted_bananas_zcp_gsparsity",
     ]

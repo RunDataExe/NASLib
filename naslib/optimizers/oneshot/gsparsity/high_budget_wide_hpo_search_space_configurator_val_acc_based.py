@@ -164,6 +164,10 @@ from naslib.optimizers import (
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
+from naslib.optimizers.oneshot.gsparsity.darts_optimizer import (
+    DARTSOptimizer,
+)
+
 from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
     ZCP_GSparseOptimizer as ZCP_GSparseOptimizer,
 )
@@ -200,7 +204,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
+    help="Optimizer type (rs, ls, bananas, drnas, darts, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -798,9 +802,47 @@ def objective(trial):
                 "fidelity": -1,
             },
         }
-    else:
-        # This will catch any optimizer types that are not configured for HPO
-        raise ValueError(f"Optimizer '{optimizer_type}' not set up for HPO.")
+    elif optimizer_type == "darts":
+        config = {
+            "search": {
+                "checkpoint_freq": 1,
+                "epochs": search_epochs,
+                "grad_clip": trial.suggest_categorical(
+                    "grad_clip", [None, 0.5, 1.0, 5.0, 10.0]
+                ),
+                "weight_decay": trial.suggest_float(
+                    "weight_decay", 1e-5, 1e-3, log=True
+                ),
+                # Operation weights optimizer params
+                "learning_rate": trial.suggest_float(
+                    "learning_rate", 1e-4, 1e-1, log=True
+                ),
+                "momentum": trial.suggest_float("momentum", 0.7, 0.95),
+                "learning_rate_min": trial.suggest_float(
+                    "learning_rate_min", 1e-5, 5e-4, log=True
+                ),
+                # Architecture weights optimizer params
+                "arch_learning_rate": trial.suggest_float(
+                    "arch_learning_rate", 1e-5, 1e-2, log=True
+                ),
+                "arch_weight_decay": trial.suggest_float(
+                    "arch_weight_decay", 1e-4, 1e-2, log=True
+                ),
+                # Search config
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
+            },
+        }
+        # Data augmentation
+        cutout = trial.suggest_categorical("cutout", [False, True])
+        config["search"]["cutout"] = cutout
+        if cutout:
+            config["search"]["cutout_length"] = trial.suggest_int(
+                "cutout_length", 8, 20
+            )
+            config["search"]["cutout_prob"] = trial.suggest_float(
+                "cutout_prob", 0.5, 1.0
+            )
 
     # Suggest cutout parameter for relevant optimizers
     if optimizer_type in [
@@ -1139,6 +1181,7 @@ def update_config(
         optimizer_type == "gsparsity"
         or optimizer_type == "zcp_gsparsity"
         or optimizer_type == "drnas"
+        or optimizer_type == "darts"
         or optimizer_type == "inverted_bananas_gsparsity"
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_gsparsity"
@@ -1379,6 +1422,8 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     # Instantiate the optimizer
     if optimizer_type in ["rs", "random_sampling"]:
         optimizer = RandomSearch(config)
+    elif optimizer_type == "darts":
+        optimizer = DARTSOptimizer(config)
     elif optimizer_type == "gsparsity":
         optimizer = GSparseOptimizer(config)
     elif optimizer_type == "zcp_gsparsity":
@@ -1401,6 +1446,12 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     # Adapt the search space for the specific optimizer
     if optimizer_type == "drnas":
         optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
+    elif optimizer_type == "darts":
+        optimizer.adapt_search_space(
+            search_space=search_space,
+            dataset_api=dataset_api,
+            dataset=dataset,
+        )
     elif optimizer_type == "gsparsity":
         optimizer.adapt_search_space(
             search_space=search_space,

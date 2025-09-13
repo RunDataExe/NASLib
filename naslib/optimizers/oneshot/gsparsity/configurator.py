@@ -22,10 +22,15 @@ from naslib.optimizers import (
     Inverted_Bananas,
     Inverted_Bananas_GsparseOptimizer,
     Inverted_Bananas_ZCP_GsparseOptimizer,
+    DrNASOptimizer,
 )
 
 from naslib.optimizers.oneshot.gsparsity.random_search_optimizer import (
     RandomSearch,
+)
+
+from naslib.optimizers.oneshot.gsparsity.darts_optimizer import (
+    DARTSOptimizer,
 )
 
 #!!!!!!!
@@ -204,7 +209,6 @@ evaluation = {
     "drop_path_prob": 0.2,
     "auxiliary_weight": 0.4,
 }
-
 optimizer_configs = {
     "rs": {  #! has to be allowed to run longer to compensate for the hpo e.g. give runtime or maybe use time per epoch to calculate how many more epochs per dataset it should be allowed to run and check back if it went over the budget if it did remove till in budget
         "search": {
@@ -279,6 +283,33 @@ optimizer_configs = {
             "learning_rate_min": 0.0,  # originally 0.0001 in gs logs 0.0
             "momentum": 0.9,  # originally 0.9 in gs logs 0.9
             "train_portion": 0.5,  # originally 0.95 in gs logs 0.5
+            "weight_decay": 0.0003,
+            # "unrolled": False,
+            "arch_weight_decay": 0.001,
+            # "op_optimizer": "SGD",
+            # "arch_optimizer": "Adam",
+            # "loss_criteria": "CrossEntropyLoss",
+        },
+    },
+    "darts": {  # settings from optimizer standard
+        "search": {
+            "checkpoint_freq": 5,
+            "epochs": search_epochs,
+            "batch_size": 48,
+            "arch_learning_rate": 0.0003,
+            "arch_weight_decay": 0.001,
+            # "op_optimizer": "SGD",
+            # "arch_optimizer": "Adam",
+            # "loss_criteria": "CrossEntropyLoss",
+            "cutout": False,
+            "cutout_length": 16,
+            "drop_path_prob": 0.3,
+            "grad_clip": 5,
+            "learning_rate": 0.025,
+            "learning_rate_min": 0.0,
+            "momentum": 0.9,
+            "weight_decay": 0.0003,
+            "train_portion": 0.5,
         },
     },
     "zcp-pre_gsparsity": {  # ? https://github.com/cc-hpc-itwm/GSparsity/tree/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113 ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/scaling_div_0.5_accuracy_statistics.txt ; https://github.com/cc-hpc-itwm/GSparsity/blob/d757f40be0178935aef705b9650002b7ed5f07ec/darts_space/logs/gsparsity-c10/search-for-cell-lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113/_log_lr_0.001_momentum_0.8_mu_60.0_div_0.5_time_20210502-195113.txt ; plus paper
@@ -617,6 +648,7 @@ def update_config(config, optimizer_type, search_space_type, dataset, seed, out_
         optimizer_type == "gsparsity"
         or optimizer_type == "zcp_gsparsity"
         or optimizer_type == "drnas"
+        or optimizer_type == "darts"
         or optimizer_type == "inverted_bananas_gsparsity"
         or optimizer_type == "inverted_bananas_zcp_gsparsity"
         or optimizer_type == "self_training_inverted_bananas_zcp_gsparsity"
@@ -849,7 +881,9 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     elif optimizer_type == "bananas":
         optimizer = Bananas(config)
     elif optimizer_type == "drnas":
-        optimizer = DrNASOptimizer()
+        optimizer = DrNASOptimizer(config)
+    elif optimizer_type == "darts":
+        optimizer = DARTSOptimizer(config)
     elif optimizer_type == "gsparsity":
         optimizer = GSparseOptimizer(config)
     elif optimizer_type == "zcp_gsparsity":
@@ -876,8 +910,10 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
     # Adapt the search space for the specific optimizer
-    if optimizer_type == "drnas":
-        optimizer.adapt_search_space(search_space=search_space, dataset=dataset)
+    if optimizer_type == "drnas" or optimizer_type == "darts":
+        optimizer.adapt_search_space(
+            search_space=search_space, dataset=dataset, dataset_api=dataset_api
+        )
     elif optimizer_type == "gsparsity":
         optimizer.adapt_search_space(
             search_space=search_space,

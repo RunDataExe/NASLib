@@ -404,10 +404,12 @@ def plot_final_accuracy_distribution(
 
     # --- 5. Finalize Plot ---
     ax.set_xlabel(
-        f"Architectures in NAS-Bench-201 Search Space ordered by Validation Accuracy ({total_archs} total)"
+        f"Queryable Architectures in NAS-Bench-201´s Search Space ordered by Validation Accuracy [Linear Scale]"
     )
     ax.set_ylabel("Validation Accuracy (%) [Linear Scale]")
-    ax.set_title(f"Final Validation Accuracy in Architecture Distribution on {dataset}")
+    ax.set_title(
+        f"Final Expanded Validation Accuracy in the Queryable Architecture Distribution on {dataset.upper()}"
+    )
     ax.set_xlim(0, total_archs)
     ax.set_ylim(bottom=0)
     ax.grid(True, which="both", ls="--", alpha=0.6)

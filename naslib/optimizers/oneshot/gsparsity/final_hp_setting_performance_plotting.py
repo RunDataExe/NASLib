@@ -302,10 +302,8 @@ def plot_anytime_performance(
                     )
 
                     # Adjust marker size and width based on the marker type
-                    current_markersize = 8 if marker == "+" else 5
-                    current_markeredgewidth = (
-                        2 if marker == "+" else 1
-                    )  # Make '+' thicker
+                    current_markersize = 6 if marker == "+" else 3
+                    current_markeredgewidth = 1 if marker == "+" else 1
 
                     # --- Split plot for interpolated vs. real data ---
                     first_real_time = time[1]
@@ -355,8 +353,8 @@ def plot_anytime_performance(
                     )
 
                     # Adjust marker size and width for '+'
-                    current_markersize = 8 if marker == "+" else 5
-                    current_markeredgewidth = 2 if marker == "+" else 1
+                    current_markersize = 6 if marker == "+" else 3
+                    current_markeredgewidth = 1 if marker == "+" else 1
 
                     # --- Split plot for interpolated vs. real data ---
                     first_real_time = time[1]
@@ -526,7 +524,7 @@ def plot_anytime_performance(
                     ncol=1,  # vertical
                 )
 
-                ax.set_xlabel("Runtime (s) [Log Scale]")
+                ax.set_xlabel("Runtime (s) [Linear Scale]")
                 if acc_metric == "valid_acc":
                     ax.set_title(
                         f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -537,8 +535,8 @@ def plot_anytime_performance(
                         f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
                     )
                     ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
-                ax.set_xscale("log")
-                ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+                ax.set_xscale("linear")
+                ax.set_xlim(left=0)  # Start x-axis at 0 for linear scale
                 ax.set_ylim(bottom=0)  # Start y-axis at 0
                 ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
                 ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -622,8 +620,8 @@ def plot_anytime_performance(
                 )
 
                 # Marker styling
-                current_markersize = 8 if marker == "+" else 5
-                current_markeredgewidth = 2 if marker == "+" else 1
+                current_markersize = 6 if marker == "+" else 3
+                current_markeredgewidth = 1 if marker == "+" else 1
 
                 first_real_time = time[1]
                 split_idx = np.searchsorted(time_grid, first_real_time)
@@ -760,7 +758,7 @@ def plot_anytime_performance(
             ncol=1,
         )
 
-        ax.set_xlabel("Runtime (s) [Log Scale]")
+        ax.set_xlabel("Runtime (s) [Linear Scale]")
         if acc_metric == "valid_acc":
             ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
             plot_title = f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -768,7 +766,7 @@ def plot_anytime_performance(
             ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
             plot_title = f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
         ax.set_title(plot_title)
-        ax.set_xscale("log")
+        ax.set_xscale("linear")
         ax.set_xlim(left=1)
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
@@ -819,6 +817,7 @@ def main():
         action="store_true",
         help="If set, combines all optimizer results into a single plot.",
     )
+    # python naslib/optimizers/oneshot/gsparsity/final_hp_setting_performance_plotting.py --combine_plots --show_auc_text --out_dir naslib/optimizers/oneshot/gsparsity/final_hp_visualization
     parser.set_defaults(combine_plots=False, show_auc_text=False, show_auc_fill=False)
     args = parser.parse_args()
 

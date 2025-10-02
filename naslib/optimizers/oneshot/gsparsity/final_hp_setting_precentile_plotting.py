@@ -1261,7 +1261,7 @@ def main():
         "--dataset",
         type=str,
         default="cifar100",
-        choices=["cifar100", "ImageNet16-120"],
+        choices=["cifar100", "ImageNet16-120", "cifar10"],
         help="The dataset to generate the distribution plot for.",
     )
     parser.add_argument(

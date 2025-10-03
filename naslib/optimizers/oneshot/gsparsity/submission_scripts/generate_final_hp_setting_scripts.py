@@ -552,13 +552,12 @@ def main():
             )
 
             for seed in seeds_to_emit:
-                # Write directly to persistent results directory (like wide HPO)
                 cmd = build_command(
                     optimizer=optimizer,
                     search_space=search_space,
                     dataset=dataset,
                     seed=seed,
-                    out_dir=args.results_out_dir,   # changed from "$OUT_DIR_LOCAL"
+                    out_dir=args.results_out_dir,
                     dataset_subset=args.dataset_subset,
                     resume=args.resume,
                     overrides=overrides,
@@ -576,6 +575,31 @@ def main():
                     results_out_dir=args.results_out_dir,
                 )
                 generated.append(script_path)
+
+                if dataset == "cifar100":
+                    cifar10_cmd = build_command(
+                        optimizer=optimizer,
+                        search_space=search_space,
+                        dataset="cifar10",
+                        seed=seed,
+                        out_dir=args.results_out_dir,
+                        dataset_subset=args.dataset_subset,
+                        resume=args.resume,
+                        overrides=overrides,
+                        zcp_method=zcp_method,
+                        search_epochs=args.search_epochs,
+                        eval_epochs=args.eval_epochs,
+                    )
+                    cifar10_script_path = write_slurm_script(
+                        out_dir=args.out_scripts_dir,
+                        optimizer=optimizer,
+                        dataset="cifar10",
+                        seed=seed,
+                        cmd=cifar10_cmd,
+                        zcp_method=zcp_method,
+                        results_out_dir=args.results_out_dir,
+                    )
+                    generated.append(cifar10_script_path)
 
     if generated:
         print("Generated scripts:")

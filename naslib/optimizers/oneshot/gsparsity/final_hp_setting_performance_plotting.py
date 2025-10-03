@@ -47,7 +47,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
-from sklearn.metrics import auc
+
+# from sklearn.metrics import auc # No longer needed
 import argparse
 import re
 from collections import defaultdict
@@ -78,6 +79,52 @@ FMTS = [*["-"] * C_MAX, *["--"] * C_MAX, *[":"] * C_MAX]
 # Prioritize the most visually distinct markers for the first few seeds.
 # Circle, Square, Plus, Diamond, and Cross are highly discriminable.
 MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
+
+
+def calculate_auc(x, y):
+    """
+    Calculates the Area Under the Curve (AUC) for a set of (x, y) points.
+    This implementation handles non-monotonic x-values by sorting them for calculation,
+    which is necessary for a valid geometric interpretation of AUC.
+    The y-values are the incumbent (best-so-far) accuracies.
+    """
+    if len(x) < 2:
+        return 0.0
+
+    # Sort points by x-value to apply the trapezoidal rule correctly.
+    sorted_indices = np.argsort(x)
+    x_sorted = x[sorted_indices]
+    y_sorted = y[sorted_indices]
+
+    # Ensure y-values are incumbent after sorting by time
+    y_incumbent = np.maximum.accumulate(y_sorted)
+
+    # Use the trapezoidal rule for integration.
+    # np.trapz is equivalent to sklearn.metrics.auc for sorted inputs.
+    return np.trapz(y_incumbent, x_sorted)
+
+
+def calculate_normalized_auc(x, y, max_time):
+    """
+    Calculates the Area Under the Curve (AUC) normalized by a maximum time.
+    The time axis (x) is scaled to [0, 1] before AUC calculation.
+    """
+    if len(x) < 2 or max_time <= 0:
+        return 0.0
+
+    # Normalize the time axis
+    x_normalized = np.array(x) / max_time
+
+    # Sort points by normalized x-value
+    sorted_indices = np.argsort(x_normalized)
+    x_norm_sorted = x_normalized[sorted_indices]
+    y_sorted = np.array(y)[sorted_indices]
+
+    # Ensure y-values are incumbent after sorting by time
+    y_incumbent = np.maximum.accumulate(y_sorted)
+
+    # Use the trapezoidal rule on the normalized time axis.
+    return np.trapz(y_incumbent, x_norm_sorted)
 
 
 def get_color_shades(base_color, n_shades):
@@ -137,63 +184,89 @@ def find_error_files(root_dir):
 
 
 def process_run_data(filepath, acc_metric, dataset):
-    """Loads and processes a single run from an errors.json file."""
+    """
+    Loads and processes a single run from an errors.json file.
+    Calculates anytime performance based on the cost of search + evaluation.
+    """
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    if not data.get(acc_metric) or not data.get("runtime"):
+    # Use queried architecture performance for a fair comparison
+    queried_acc_metric = (
+        "queried_val_acc" if acc_metric == "valid_acc" else "queried_train_acc"
+    )
+
+    # Check for required data for a valid anytime performance curve
+    if not all(
+        k in data
+        for k in [
+            queried_acc_metric,
+            "scaled_queried_train_time",
+            "runtime",
+        ]
+    ):
         return None, None, None
 
-    acc = np.array(data[acc_metric])
+    acc = np.array(data[queried_acc_metric])
+    eval_time = np.array(data["scaled_queried_train_time"])
     runtime = np.array(data["runtime"])
-    loss = np.array(data.get("train_loss", []))  # Use train_loss to detect stages
+    loss = np.array(data.get("train_loss", []))
 
-    # Handle two-stage methods by checking for -1 in loss values
+    # Ensure data arrays are not empty and have compatible lengths
+    if not (len(acc) > 0 and len(acc) == len(eval_time) and len(acc) == len(runtime)):
+        return None, None, None
+
+    # Handle different method types (one-stage, two-stage, random search)
     is_two_stage = -1 in loss
-    if is_two_stage:
+    is_random_search = len(loss) > 0 and np.all(loss == -1)
+
+    if is_random_search:
+        # For Random Search, total time is just the cumulative evaluation time.
+        # 'runtime' in this case is the same as 'scaled_queried_train_time'.
+        total_time = np.cumsum(eval_time)
+
+    elif is_two_stage:
         stage2_indices = np.where(loss != -1)[0]
-
-        # If there are no entries for stage 2, check if it's a fully queried method
         if len(stage2_indices) == 0:
-            # This is a fully queried method if all loss values are -1
-            if len(loss) > 0 and np.all(loss == -1):
-                # For fully queried methods, time is cumulative runtime
-                cumulative_time = np.cumsum(runtime)
-            else:
-                # It's a two-stage method that didn't reach stage 2, so skip.
-                return None, None, None
-        else:
-            # This is a standard two-stage method
-            first_stage2_idx = stage2_indices[0]
-            stage1_runtime = runtime[:first_stage2_idx].sum()
+            return None, None, None  # Incomplete two-stage run
 
-            # Filter for stage 2 data
-            acc = acc[stage2_indices]
-            runtime = runtime[stage2_indices]
+        # Sum of search time from stage 1
+        first_stage2_idx = stage2_indices[0]
+        stage1_search_cost = runtime[:first_stage2_idx].sum()
 
-            # Prepend the summed stage 1 runtime to the cumulative time of stage 2
-            cumulative_time = np.cumsum(runtime) + stage1_runtime
-    else:
-        # For single-stage methods, just calculate cumulative time
-        cumulative_time = np.cumsum(runtime)
+        # Filter data to only include stage 2
+        stage2_runtime = runtime[stage2_indices]
+        acc = acc[stage2_indices]
+        eval_time = eval_time[stage2_indices]
+
+        # Cumulative search cost during stage 2
+        stage2_cumulative_search_cost = np.cumsum(stage2_runtime)
+
+        # Total time = (stage 1 search) + (cumulative stage 2 search) + (eval time at each step)
+        total_time = stage1_search_cost + stage2_cumulative_search_cost + eval_time
+
+    else:  # Single-stage search method
+        cumulative_search_cost = np.cumsum(runtime)
+        # Total time = (cumulative search cost) + (eval time at each step)
+        total_time = cumulative_search_cost + eval_time
 
     # If after processing, we have less than 1 point, we can't plot or calculate AUC.
     if len(acc) < 1:
         return None, None, None
 
     # Prepend a random guess at time=0
-    num_classes = DATASET_CLASSES.get(dataset, 10)  # Default to 10 if unknown
+    num_classes = DATASET_CLASSES.get(dataset, 10)
     random_guess_acc = 1.0 / num_classes
-    cumulative_time = np.insert(cumulative_time, 0, 0)
+    total_time = np.insert(total_time, 0, 0)
     acc = np.insert(acc, 0, random_guess_acc)
 
-    # Use incumbent (best-so-far) performance
+    # Use incumbent (best-so-far) performance on the original sequence of events
     acc = np.maximum.accumulate(acc)
 
-    # Calculate AUC on the incumbent accuracy, handle cases with a single point.
-    run_auc = auc(cumulative_time, acc) if len(cumulative_time) >= 2 else 0.0
+    # Calculate AUC using the custom function that handles non-monotonic time.
+    run_auc = calculate_auc(total_time, acc)
 
-    return cumulative_time, acc, run_auc
+    return total_time, acc, run_auc
 
 
 def plot_anytime_performance(
@@ -569,13 +642,33 @@ def plot_anytime_performance(
             if ds == dataset
         ]
 
+        # --- Pre-scan to find the global max time for this dataset for AUC normalization ---
+        global_max_time = 0
+        all_run_data = {}  # Cache processed data to avoid re-reading files
+        for (optimizer, zcp_method, ds, search_space), runs in ds_groups:
+            group_key = (optimizer, zcp_method, ds, search_space)
+            all_run_data[group_key] = []
+            for run_meta in runs:
+                time, acc, _ = process_run_data(run_meta["path"], acc_metric, dataset)
+                if time is not None and len(time) > 0:
+                    global_max_time = max(global_max_time, time[-1])
+                    all_run_data[group_key].append(
+                        {"meta": run_meta, "time": time, "acc": acc}
+                    )
+        print(
+            f"  Global max time for {dataset} set to {global_max_time:.2f}s for AUC normalization."
+        )
+
         # Keep track for legend handles later
         all_handles = []
         all_labels = []
 
         # Process each optimizer group for this dataset
-        for (optimizer, zcp_method, ds, search_space), runs in ds_groups:
-            all_aucs = []
+        for (optimizer, zcp_method, ds, search_space), _ in ds_groups:
+            group_key = (optimizer, zcp_method, ds, search_space)
+            processed_runs = all_run_data[group_key]
+
+            all_norm_aucs = []
             all_trajectories = []
             all_valid_runs_meta = []
             group_label = format_method_label(optimizer, zcp_method)
@@ -585,14 +678,14 @@ def plot_anytime_performance(
             print(f"  Processing {group_label} on {dataset} ({search_space})...")
 
             # Process runs and collect valid data first
-            for run_meta in runs:
-                time, acc, run_auc = process_run_data(
-                    run_meta["path"], acc_metric, dataset
-                )
-                if time is None:
-                    print(f"    - Skipping seed {run_meta['seed']} (no data).")
-                    continue
-                all_aucs.append(run_auc)
+            for run_data in processed_runs:
+                time, acc = run_data["time"], run_data["acc"]
+                run_meta = run_data["meta"]
+
+                # Calculate NORMALIZED AUC
+                run_norm_auc = calculate_normalized_auc(time, acc, global_max_time)
+
+                all_norm_aucs.append(run_norm_auc)
                 all_trajectories.append((time, acc))
                 all_valid_runs_meta.append(run_meta)
 
@@ -671,11 +764,11 @@ def plot_anytime_performance(
             mean_acc = np.mean(interpolated_accs, axis=0)
             std_acc = np.std(interpolated_accs, axis=0)
 
-            mean_auc = np.mean(all_aucs)
-            std_auc = np.std(all_aucs)
-            print(f"    - AUC: {mean_auc:.2f} ± {std_auc:.2f}")
-            for i, run_auc in enumerate(all_aucs):
-                print(f"      - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.2f}")
+            mean_auc = np.mean(all_norm_aucs)
+            std_auc = np.std(all_norm_aucs)
+            print(f"    - Normalized AUC: {mean_auc:.4f} ± {std_auc:.4f}")
+            for i, run_auc in enumerate(all_norm_aucs):
+                print(f"      - Seed {all_valid_runs_meta[i]['seed']}: {run_auc:.4f}")
 
             first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
             mean_split_idx = (

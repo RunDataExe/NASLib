@@ -479,15 +479,14 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item() * max(
+                                ).item() * max(1 -
                                     edge.data.op.primitives[i].op[j].zero_cost_proxy,
                                     0.000000001,
                                 )
                                 # was logger.info with f-string
                                 logger.debug(
                                     "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
-                                    max(
-                                        edge.data.op.primitives[i]
+                                    max(1 - edge.data.op.primitives[i]
                                         .op[j]
                                         .zero_cost_proxy,
                                         1e-9,
@@ -516,7 +515,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item() * max(
+                                        ).item() * max(1 -
                                             edge.data.op.primitives[i]
                                             .op[j]
                                             .op[k]
@@ -526,7 +525,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         # was logger.info with f-string
                                         logger.debug(
                                             "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
-                                            max(
+                                            max(1 -
                                                 edge.data.op.primitives[i]
                                                 .op[j]
                                                 .op[k]
@@ -550,13 +549,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2 * max(
+                        ) ** 2 * max(1 - 
                             edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
                         )
                         # was logger.info with f-string
                         logger.debug(
                             "Applying normalized ZCP: %s to Primitive %d weight: %s",
-                            max(edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
+                            max(1 - edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
                             i,
                             edge.data.weights[i],
                         )
@@ -706,14 +705,14 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item() * max(
+                                ).item() * max(1 - 
                                     edge.data.op.primitives[i].op[j].zero_cost_proxy,
                                     0.000000001,
                                 )
                                 # was logger.info with f-string
                                 logger.debug(
                                     "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
-                                    max(
+                                    max(1 - 
                                         edge.data.op.primitives[i]
                                         .op[j]
                                         .zero_cost_proxy,
@@ -743,7 +742,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item() * max(
+                                        ).item() * max(1 - 
                                             edge.data.op.primitives[i]
                                             .op[j]
                                             .op[k]
@@ -753,7 +752,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         # was logger.info with f-string
                                         logger.debug(
                                             "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
-                                            max(
+                                            max(1 - 
                                                 edge.data.op.primitives[i]
                                                 .op[j]
                                                 .op[k]
@@ -777,13 +776,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2 * max(
+                        ) ** 2 * max(1 - 
                             edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
                         )
                         # was logger.info with f-string
                         logger.debug(
                             "Applying normalized ZCP: %s to Primitive %d weight: %s",
-                            max(edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
+                            max(1 - edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
                             i,
                             edge.data.weights[i],
                         )

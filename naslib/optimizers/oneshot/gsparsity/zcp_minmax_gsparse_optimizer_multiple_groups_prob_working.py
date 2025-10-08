@@ -192,63 +192,47 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
         def collect_zero_cost_proxy_scores(edge):
             if edge.data.has("alpha"):
-                for i in range(len(edge.data.op.primitives)):
+                for i, prim in enumerate(edge.data.op.primitives):
                     try:
-                        for j in range(len(edge.data.op.primitives[i].op)):
-                            try:
-                                op = edge.data.op.primitives[i].op[j]
-                                score = evaluate_micro_architecture_zcp(
-                                    operation=op,
-                                    operation_input_full_shape=op.shapes["input_shape"],
-                                    operation_output_full_shape=op.shapes[
-                                        "output_shape"
-                                    ],
-                                    dataloader=self.train_loader,
-                                    zcp_method=self.zcp_method,
-                                    dataset=self.dataset,
-                                )
-                                op.zero_cost_proxy = score
-                                raw_zero_cost_proxy_scores.append(score)
-                                scored_counter["n"] += 1
-                                logger.info(
-                                    "ZCP raw score edge(%s->%s) prim=%d sub=%d op=%s: %.6f",
-                                    edge.head,
-                                    edge.tail,
-                                    i,
-                                    j,
-                                    type(op).__name__,
-                                    float(score),
-                                )
-                            except (AttributeError, TypeError):
-                                logger.info(
-                                    "Skip scoring edge(%s->%s) prim=%d sub=%d (no weights/shape).",
-                                    edge.head,
-                                    edge.tail,
-                                    i,
-                                    j,
-                                )
-                                continue
-                    except AttributeError:
-                        op = edge.data.op.primitives[i]
+                        input_shape = prim.shapes["input_shape"]
+                        output_shape = prim.shapes["output_shape"]
+                    except (AttributeError, KeyError, TypeError):
+                        logger.info(
+                            "Skip scoring edge(%s->%s) prim=%d (missing shapes).",
+                            edge.head,
+                            edge.tail,
+                            i,
+                        )
+                        continue
+                    try:
                         score = evaluate_micro_architecture_zcp(
-                            operation=op,
-                            operation_input_full_shape=op.shapes["input_shape"],
-                            operation_output_full_shape=op.shapes["output_shape"],
+                            operation=prim,
+                            operation_input_full_shape=input_shape,
+                            operation_output_full_shape=output_shape,
                             dataloader=self.train_loader,
                             zcp_method=self.zcp_method,
                             dataset=self.dataset,
                         )
-                        op.zero_cost_proxy = score
-                        raw_zero_cost_proxy_scores.append(score)
-                        scored_counter["n"] += 1
+                    except Exception as exc:
                         logger.info(
-                            "ZCP raw score edge(%s->%s) prim=%d op=%s: %.6f",
+                            "Failed scoring edge(%s->%s) prim=%d (%s).",
                             edge.head,
                             edge.tail,
                             i,
-                            type(op).__name__,
-                            float(score),
+                            exc,
                         )
+                        continue
+                    prim.zero_cost_proxy = score
+                    raw_zero_cost_proxy_scores.append(score)
+                    scored_counter["n"] += 1
+                    logger.info(
+                        "ZCP raw score edge(%s->%s) prim=%d %s: %.6f",
+                        edge.head,
+                        edge.tail,
+                        i,
+                        type(prim).__name__,
+                        float(score),
+                    )
 
         graph.update_edges(
             collect_zero_cost_proxy_scores, scope=scope, private_edge_data=True
@@ -301,41 +285,22 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         normalized_counter = {"n": 0}
 
         def normalize_and_apply_scores(edge):
-            if edge.data.has("zero_cost_proxy"):
-                for i in range(len(edge.data.op.primitives)):
-                    try:
-                        for j in range(len(edge.data.op.primitives[i].op)):
-                            try:
-                                op = edge.data.op.primitives[i].op[j]
-                                before = float(op.zero_cost_proxy)
-                                op.zero_cost_proxy = normalize(op.zero_cost_proxy)
-                                normalized_counter["n"] += 1
-                                logger.info(
-                                    "ZCP normalized edge(%s->%s) prim=%d sub=%d %s: %.6f -> %.6f",
-                                    edge.head,
-                                    edge.tail,
-                                    i,
-                                    j,
-                                    type(op).__name__,
-                                    before,
-                                    float(op.zero_cost_proxy),
-                                )
-                            except (AttributeError, TypeError):
-                                continue
-                    except AttributeError:
-                        op = edge.data.op.primitives[i]
-                        before = float(op.zero_cost_proxy)
-                        op.zero_cost_proxy = normalize(op.zero_cost_proxy)
-                        normalized_counter["n"] += 1
-                        logger.info(
-                            "ZCP normalized edge(%s->%s) prim=%d %s: %.6f -> %.6f",
-                            edge.head,
-                            edge.tail,
-                            i,
-                            type(op).__name__,
-                            before,
-                            float(op.zero_cost_proxy),
-                        )
+            if edge.data.has("alpha"):
+                for i, prim in enumerate(edge.data.op.primitives):
+                    if not hasattr(prim, "zero_cost_proxy"):
+                        continue
+                    before = float(prim.zero_cost_proxy)
+                    prim.zero_cost_proxy = normalize(before)
+                    normalized_counter["n"] += 1
+                    logger.info(
+                        "ZCP normalized edge(%s->%s) prim=%d %s: %.6f -> %.6f",
+                        edge.head,
+                        edge.tail,
+                        i,
+                        type(prim).__name__,
+                        before,
+                        float(prim.zero_cost_proxy),
+                    )
 
         graph.update_edges(
             normalize_and_apply_scores, scope=scope, private_edge_data=True
@@ -465,25 +430,11 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
     def _avg_primitive_zcp(self, prim, default=0):
         """
-        Average normalized ZCP over all leaves available under a primitive.
-        Falls back to primitive.zero_cost_proxy if present, else default.
+        Return the primitive-level normalized ZCP score.
         """
-        leaves = self._collect_leaf_modules_with_zcp(prim)
-        if len(leaves) == 0:
-            val = float(getattr(prim, "zero_cost_proxy", default))
-            logger.info(
-                "Primitive %s: no leaves, fallback ZCP=%.6f.", type(prim).__name__, val
-            )
-            return val
-        vals = [float(getattr(l, "zero_cost_proxy", default)) for l in leaves]
-        avg = float(sum(vals) / max(len(vals), 1))
-        logger.info(
-            "Primitive %s: avg ZCP over %d leaves = %.6f.",
-            type(prim).__name__,
-            len(vals),
-            avg,
-        )
-        return avg
+        val = float(getattr(prim, "zero_cost_proxy", default))
+        logger.info("Primitive %s: ZCP=%.6f.", type(prim).__name__, val)
+        return val
 
     def _primitive_params(self, prim):
         """
@@ -536,10 +487,21 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         # 2) Aggregate to a single ZCP per group
         group_scores = {}
         for k, v in groups.items():
-            group_scores[k] = float(sum(v["zcp_vals"]) / max(len(v["zcp_vals"]), 1))
+            zcps = v["zcp_vals"]
+            group_scores[k] = float(np.median(zcps)) if zcps else 0.0
+            logger.info(
+                "Group %s: median aggregated ZCP=%.6f from %d values.",
+                k,
+                group_scores[k],
+                len(zcps),
+            )
 
         # 3) Map to penalty scale (already normalized ZCP: low ZCP -> higher penalty)
         scales = {k: max(1.0 - s, 1e-9) for k, s in group_scores.items()}
+        for k, s in scales.items():
+            logger.info(
+                "Group %s: reversed and floored median zcp -> penalty scale=%.6f.", k, s
+            )
 
         # 4) Build param_groups with per-group weight_decay
         param_groups = []
@@ -560,7 +522,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             }
             param_groups.append(pg)
             logger.info(
-                "Param group %s: params=%d, avg_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
+                "Param group %s: params=%d, median_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
                 k,
                 len(v["params"]),
                 group_scores[k],
@@ -590,24 +552,28 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         groups = {}
         for edge, i, prim in self._iter_edge_primitives(graph, scope):
             key = self._group_key(edge, i)
-            groups.setdefault(key, []).append(
-                self._avg_primitive_zcp(prim, default=1.0)
-            )
+            groups.setdefault(key, []).append(self._avg_primitive_zcp(prim, default=0))
 
         updated = 0
-        # Update in-place (scale = 1 - avg_zcp)
+        # Update in-place (scale = 1 - median zcp)
         for pg in optimizer.param_groups:
             key = pg.get("group_key", None)
             if key is None or key not in groups:
                 logger.info("Skip optimizer group without matching key: %s", str(key))
                 continue
-            gscore = float(sum(groups[key]) / max(len(groups[key]), 1))
-            scale = max(1.0 - gscore, 0.0)
+            gscore = float(np.median(groups[key])) if groups[key] else 0.0
+            logger.info("Group %s: new median zcp=%.6f.", key, gscore)
+            scale = max(1.0 - gscore, 1e-9)
+            logger.info(
+                "Group %s: reversed and floored median zcp -> penalty scale=%.6f.",
+                key,
+                scale,
+            )
             pg["weight_decay"] = float(base_mu) * float(scale)
             pg["zcp_scale"] = float(scale)
             updated += 1
             logger.info(
-                "Updated group %s: avg_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
+                "Updated group %s: median_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
                 key,
                 gscore,
                 scale,
@@ -616,7 +582,6 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
         logger.info("Refreshed weight_decay for %d optimizer groups.", updated)
 
-    # ...existing code...
     def adapt_search_space(
         self, search_space, scope=None, train_loader=None, dataset_api=None, **kwargs
     ):

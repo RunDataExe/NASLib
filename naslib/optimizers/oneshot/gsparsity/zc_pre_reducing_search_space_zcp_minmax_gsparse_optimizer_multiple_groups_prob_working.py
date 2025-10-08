@@ -557,7 +557,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             groups[key]["params"].extend(p)
             groups[key]["zcp_vals"].append(z)
             logger.info(
-                "Group %s: +%d params, +ZCP=%.6f (running counts: params=%d, zcp_vals=%d).",
+                "Group %s: +%d params, +ZCP=%.6f (running: params=%d, zcp_vals=%d)",
                 key,
                 len(p),
                 z,
@@ -565,9 +565,21 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 len(groups[key]["zcp_vals"]),
             )
 
-        # Remove empty param groups (just in case)
-        groups = {k: v for k, v in groups.items() if len(v["params"]) > 0}
-        logger.info("Built preliminary %d param groups (non-empty).", len(groups))
+        # Summary of initial grouping
+        total_groups = len(groups)
+        total_params = sum(len(v["params"]) for v in groups.values())
+        total_zcp_vals = sum(len(v["zcp_vals"]) for v in groups.values())
+        avg_params_per_group = total_params / total_groups if total_groups else 0.0
+        avg_zcp_per_group = total_zcp_vals / total_groups if total_groups else 0.0
+        logger.info(
+            "[init groups] groups=%d, total_params=%d, total_zcp_vals=%d, "
+            "avg_params/group=%.2f, avg_zcp/group=%.2f",
+            total_groups,
+            total_params,
+            total_zcp_vals,
+            avg_params_per_group,
+            avg_zcp_per_group,
+        )
 
         # 2) Aggregate to a single ZCP per group
         group_scores = {}
@@ -594,6 +606,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             if not v["params"]:
                 continue
             wd = float(base_mu) * float(scales[k])
+            n_params = len(v["params"])
+            n_zcp = len(groups[k]["zcp_vals"])
             pg = {
                 "params": v["params"],
                 "weight_decay": wd,
@@ -604,12 +618,17 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 "clip_bounds": (0, 1),
                 "normalization": self.normalization,
                 "normalization_exponent": self.normalization_exponent,
+                # store counts for later reference/logging
+                "n_params": n_params,
+                "n_zcp": n_zcp,
             }
             param_groups.append(pg)
             logger.info(
-                "Param group %s: params=%d, median_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
+                "Param group %s: n_params=%d, n_zcp=%d, median_zcp=%.6f, "
+                "scale=%.6f, weight_decay=%.6f",
                 k,
-                len(v["params"]),
+                n_params,
+                n_zcp,
                 group_scores[k],
                 scales[k],
                 wd,
@@ -639,7 +658,19 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             key = self._group_key(edge, i)
             groups.setdefault(key, []).append(self._avg_primitive_zcp(prim, default=0))
 
+        # Summary before applying updates
+        total_groups = len(groups)
+        total_zcp_vals = sum(len(v) for v in groups.values())
+        avg_zcp_per_group = total_zcp_vals / total_groups if total_groups else 0.0
+        logger.info(
+            "[refresh groups] groups=%d, total_zcp_vals=%d, avg_zcp/group=%.2f",
+            total_groups,
+            total_zcp_vals,
+            avg_zcp_per_group,
+        )
+
         updated = 0
+        total_params = 0
         # Update in-place (scale = 1 - median zcp)
         for pg in optimizer.param_groups:
             key = pg.get("group_key", None)
@@ -647,25 +678,34 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 logger.info("Skip optimizer group without matching key: %s", str(key))
                 continue
             gscore = float(np.median(groups[key])) if groups[key] else 0.0
-            logger.info("Group %s: new median zcp=%.6f.", key, gscore)
             scale = max(1.0 - gscore, 1e-9)
-            logger.info(
-                "Group %s: reversed and floored median zcp -> penalty scale=%.6f.",
-                key,
-                scale,
-            )
             pg["weight_decay"] = float(base_mu) * float(scale)
             pg["zcp_scale"] = float(scale)
+
+            # update and log counts
+            n_params = len(pg.get("params", []))
+            n_zcp = len(groups[key])
+            pg["n_params"] = n_params
+            pg["n_zcp"] = n_zcp
+            total_params += n_params
+
             updated += 1
             logger.info(
-                "Updated group %s: median_zcp=%.6f, scale=%.6f, weight_decay=%.6f",
+                "Updated group %s: n_params=%d, n_zcp=%d, median_zcp=%.6f, "
+                "scale=%.6f, weight_decay=%.6f",
                 key,
+                n_params,
+                n_zcp,
                 gscore,
                 scale,
                 float(pg["weight_decay"]),
             )
 
-        logger.info("Refreshed weight_decay for %d optimizer groups.", updated)
+        logger.info(
+            "Refreshed weight_decay for %d optimizer groups (total_params=%d).",
+            updated,
+            total_params,
+        )
 
     def adapt_search_space(
         self,
@@ -943,6 +983,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 for i in range(len(edge.data.op.primitives)):
                     # Skip pruned slots
                     if getattr(edge.data.op.primitives[i], "was_pruned_slot", False):
+                        logger.info(
+                            "Skip L2 weight update for pruned slot edge(%s->%s) prim=%d %s",
+                            edge.head,
+                            edge.tail,
+                            i,
+                            type(edge.data.op.primitives[i]).__name__,
+                        )
                         continue
                     try:
                         for j in range(len(edge.data.op.primitives[i].op)):
@@ -1190,7 +1237,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             if edge.data.has("alpha"):
                 for i in range(len(edge.data.op.primitives)):
                     edge.data.weights[i] = (
-                        edge.data.weights[i]
+                        torch.sqrt(edge.data.weights[i])
                         / torch.pow(
                             edge.data.dimension[i], normalization_exponent
                         ).item()
@@ -1304,7 +1351,7 @@ class GSparseMixedOp(MixedOp):
                 else:
                     summed += op(x, None)
 
-        summed = torch.nn.functional.normalize(summed)
+        # summed = torch.nn.functional.normalize(summed)
         return summed
 
     # The following functions are obsolete because of the forward implementation but are needed due to the inheritance

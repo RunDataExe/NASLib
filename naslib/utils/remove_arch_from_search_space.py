@@ -43,8 +43,16 @@ def add_betas_to_edges(graph: Graph, scope: list = None):
                         ),
                         requires_grad=False,
                     )
-                    # 'beta' is private to this edge's list of choices
                     edge_data.set("beta", beta, shared=False)
+
+                # Record original slot names once to preserve the mapping
+                if not edge_data.has("op_slot_names"):
+                    try:
+                        slot_names = [op.get_op_name for op in edge_data.op]
+                    except Exception:
+                        slot_names = [type(op).__name__ for op in edge_data.op]
+                    # private to the edge, fixed-length mapping
+                    edge_data.set("op_slot_names", slot_names, shared=False)
 
     graph.update_edges(
         lambda edge: _add_beta_param_to_edge_data(edge.data),  # edge is EdgeAttributes
@@ -108,9 +116,19 @@ def _mark_architecture_betas_on_graph(
                 and isinstance(edge_data.op, list)
             ):
                 target_op_name = arch_op_names_on_edges[current_edge_tuple_in_cell]
-                # Find the op by name in the current ops list
-                for i, op in enumerate(edge_data.op):
-                    if op.get_op_name == target_op_name:
+
+                # Use the original slot-name mapping instead of current op objects
+                if edge_data.has("op_slot_names"):
+                    slot_names = list(edge_data.op_slot_names)
+                else:
+                    try:
+                        slot_names = [op.get_op_name for op in edge_data.op]
+                    except Exception:
+                        slot_names = [type(op).__name__ for op in edge_data.op]
+                    edge_data.set("op_slot_names", slot_names, shared=False)
+
+                for i, slot_name in enumerate(slot_names):
+                    if slot_name == target_op_name:
                         edge_data.beta[i] = 1
                         break
 
@@ -140,31 +158,36 @@ def _apply_pruning_to_graph_edges(graph: Graph, scope: list = None):
             original_ops = edge_data.op
             betas = edge_data.beta
 
-            kept_ops = []
+            # If mismatch, keep original to avoid unexpected breakage
             if len(original_ops) != len(betas):
-                # Fallback: if mismatch, keep original ops to avoid breaking search space unexpectedly.
-                # This state should ideally be prevented by consistent use of add_betas_to_edges.
-                # print(f"Warning: Mismatch len(ops)={len(original_ops)} vs len(betas)={len(betas)} on an edge. Skipping pruning for this edge.")
                 kept_ops = original_ops
             else:
+                # Preserve slot order/length; replace pruned slots in-place
+                kept_ops = []
                 for i, op_primitive in enumerate(original_ops):
-                    if betas[i] == 1:  # Marked for removal
-                        pass
+                    if betas[i] == 1:
+                        # slot is pruned -> insert placeholder but keep index
+                        placeholder = naslib_ops.Zero(stride=1)
+                        # mark to avoid adding trainable weight later
+                        setattr(placeholder, "was_pruned_slot", True)
+                        kept_ops.append(placeholder)
                     else:
                         kept_ops.append(op_primitive)
 
-            if (
-                not kept_ops and original_ops
-            ):  # All ops were pruned AND there were ops initially
-                # print(f"Warning: All ops on an edge were pruned. Adding Zero(stride=1) as fallback.")
-                # For NB201 cell, Zero op typically has stride 1.
-                # This Zero op should be instantiated correctly if it needs specific parameters (e.g., channels),
-                # but naslib_ops.Zero is generally simple.
-                kept_ops.append(naslib_ops.Zero(stride=1))
+            # Ensure at least one op exists
+            if not kept_ops and original_ops:
+                placeholder = naslib_ops.Zero(stride=1)
+                setattr(placeholder, "was_pruned_slot", True)
+                kept_ops = [placeholder]
+
+            # Preserve original slot-name mapping if present
+            if edge_data.has("op_slot_names"):
+                # keep as-is; mapping remains valid
+                pass
 
             edge_data.set("op", kept_ops)
 
-            # Reset beta array for the new list of ops, so it's ready for the next removal
+            # Reset beta array for the same number of slots (all zeros)
             new_beta_param = torch.nn.Parameter(
                 torch.zeros(
                     size=[len(kept_ops)], dtype=torch.int8, requires_grad=False

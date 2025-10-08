@@ -93,6 +93,52 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.pruned_op_indices = []  # List of op_indices to prune
         self.best_arch = None
 
+    @staticmethod
+    def check_pruning_invariants(optimizer, graph, scope):
+        # 1) collect all optimizer params
+        opt_param_ids = {id(p) for g in optimizer.param_groups for p in g["params"]}
+
+        n_edges = n_pruned = n_active = n_bad = 0
+
+        def _check(edge):
+            nonlocal n_edges, n_pruned, n_active, n_bad
+            if edge.data.has("alpha") and hasattr(edge.data.op, "primitives"):
+                n_edges += 1
+                for i, prim in enumerate(edge.data.op.primitives):
+                    is_pruned = bool(getattr(prim, "was_pruned_slot", False))
+                    has_params = any(id(p) in opt_param_ids for p in prim.parameters())
+                    if is_pruned:
+                        n_pruned += 1
+                        if has_params:  # pruned slot must not carry trainable params
+                            n_bad += 1
+                    else:
+                        n_active += 1
+
+        graph.update_edges(_check, scope=scope, private_edge_data=True)
+        logger.info(
+            f"[check] edges={n_edges} active_prims={n_active} pruned_placeholders={n_pruned} bad_pruned_with_params={n_bad}"
+        )
+        assert n_bad == 0, (
+            "Found pruned placeholders leaking parameters into optimizer!"
+        )
+
+    @staticmethod
+    def dump_edge_prims(graph, scope):
+        counts = []
+
+        def _dump(edge):
+            if hasattr(edge.data.op, "primitives"):
+                names = [
+                    (i, type(p).__name__, bool(getattr(p, "was_pruned_slot", False)))
+                    for i, p in enumerate(edge.data.op.primitives)
+                ]
+                counts.append((f"{edge.head}->{edge.tail}", names))
+
+        graph.update_edges(_dump, scope=scope, private_edge_data=True)
+        for e, names in counts[:12]:
+            logger.info(f"{e} : {names}")
+        logger.info(f"edges listed: {len(counts)}")
+
     def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
         op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
         if not op_dir or not getattr(self.config.search, "zcp_method", None):
@@ -206,6 +252,16 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         def collect_zero_cost_proxy_scores(edge):
             if edge.data.has("alpha"):
                 for i, prim in enumerate(edge.data.op.primitives):
+                    # Skip pruned slots (placeholders)
+                    if getattr(prim, "was_pruned_slot", False):
+                        logger.debug(
+                            "Skip ZCP scoring pruned slot edge(%s->%s) prim=%d %s",
+                            edge.head,
+                            edge.tail,
+                            i,
+                            type(prim).__name__,
+                        )
+                        continue
                     try:
                         input_shape = prim.shapes["input_shape"]
                         output_shape = prim.shapes["output_shape"]
@@ -300,6 +356,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         def normalize_and_apply_scores(edge):
             if edge.data.has("alpha"):
                 for i, prim in enumerate(edge.data.op.primitives):
+                    # Skip pruned slots
+                    if getattr(prim, "was_pruned_slot", False):
+                        continue
                     if not hasattr(prim, "zero_cost_proxy"):
                         continue
                     before = float(prim.zero_cost_proxy)
@@ -372,6 +431,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             try:
                 len(edge.data.op[i].op)
             except AttributeError:
+                # Skip attaching weights to pruned placeholders to keep them inert
+                if getattr(edge.data.op[i], "was_pruned_slot", False):
+                    continue
                 weight = torch.nn.Parameter(
                     torch.FloatTensor([1.0]), requires_grad=True
                 )
@@ -394,7 +456,17 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     "Visit edge(%s->%s): %d primitives.", edge.head, edge.tail, n_prims
                 )
                 for i, prim in enumerate(edge.data.op.primitives):
+                    # Skip pruned slots
+                    if getattr(prim, "was_pruned_slot", False):
+                        continue
                     items.append((edge, i, prim))
+                    logger.info(
+                        "Edge (%s->%s) prim=%d %s actually collected.",
+                        edge.head,
+                        edge.tail,
+                        i,
+                        type(prim).__name__,
+                    )
 
         graph.update_edges(_collect, scope=scope, private_edge_data=True)
         logger.info(
@@ -869,6 +941,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 weight = 0.0
                 group_dim = torch.zeros(1)
                 for i in range(len(edge.data.op.primitives)):
+                    # Skip pruned slots
+                    if getattr(edge.data.op.primitives[i], "was_pruned_slot", False):
+                        continue
                     try:
                         for j in range(len(edge.data.op.primitives[i].op)):
                             try:
@@ -909,6 +984,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         weight = 0.0
                         group_dim = torch.zeros(1)
                     except AttributeError:
+                        # Parameter-less op with attached weight (not placeholders)
                         size = torch.tensor(
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
@@ -948,32 +1024,28 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         def discretize_ops(edge):
             if edge.data.has("alpha"):
                 primitives = edge.data.op.get_embedded_ops()
-                alphas = edge.data.alpha.detach().cpu()
-                """
-                The next 2 lines of code is just to make sure only 1 operation is chosen per edge
-                so that the resulting architecture is comparable to other optimizers and 
-                queryable from the benchmark.
-                """
                 weights = edge.data.weights.detach().cpu()
-                alphas = torch.nn.Parameter(
-                    torch.zeros(size=[len(alphas)], requires_grad=False),
-                    requires_grad=False,
-                )
-                alphas[torch.argmax(weights)] = 1
-                """
-                Only the operations whose alpha are non-zero are retained,
-                others are pruned away. If on an edge, more than 1 operations 
-                are to be retained, then the operation of the edge is set to a MixedOp
-                of these operations.
-                """
-                positions = alphas.nonzero()
-                if len(positions) > 1:
-                    operations = []
-                    for pos in positions:
-                        operations.append(primitives[pos])
-                    edge.data.set("op", GSparseMixedOp(operations))
+
+                # collect candidates: skip placeholders; prefer non-Zero if any
+
+                all_valid_candidates = []
+                for idx, prim in enumerate(primitives):
+                    if getattr(prim, "was_pruned_slot", False):
+                        continue
+                    all_valid_candidates.append((idx, float(weights[idx])))
+
+                # fallback to first non-placeholder if somehow empty
+                if not all_valid_candidates:
+                    for idx, prim in enumerate(primitives):
+                        if not getattr(prim, "was_pruned_slot", False):
+                            chosen = idx
+                            break
+                    else:
+                        chosen = 0  # very unlikely
                 else:
-                    edge.data.set("op", primitives[positions.item()])
+                    chosen = max(all_valid_candidates, key=lambda t: t[1])[0]
+
+                edge.data.set("op", primitives[chosen])
 
         # Detailed description of the operations are provided in the functions.
         graph.update_edges(update_l2_weights, scope=self.scope, private_edge_data=True)
@@ -1029,6 +1101,10 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.graph = self.graph.to(self.device)
         self.operation_weights = self.operation_weights.to(self.device)
 
+        # ZCP_GSparseOptimizer.check_pruning_invariants(
+        #     self.op_optimizer, self.graph, self.scope
+        # )
+
     def new_epoch(self, epoch):
         """
         Just log the l2 norms of operation weights.
@@ -1041,6 +1117,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 scope=self.scope,
                 base_mu=self.mu,
             )
+        # else:
+        #     ZCP_GSparseOptimizer.dump_edge_prims(self.graph, self.scope)
 
         normalization_exponent = self.normalization_exponent
 
@@ -1056,6 +1134,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 weight = 0.0
                 group_dim = torch.zeros(1)
                 for i in range(len(edge.data.op.primitives)):
+                    # Skip pruned slots
+                    if getattr(edge.data.op.primitives[i], "was_pruned_slot", False):
+                        continue
                     try:
                         for j in range(len(edge.data.op.primitives[i].op)):
                             try:
@@ -1096,6 +1177,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         weight = 0.0
                         group_dim = torch.zeros(1)
                     except AttributeError:
+                        # Parameter-less op with attached weight (not placeholders)
                         size = torch.tensor(
                             torch.numel(edge.data.op.primitives[i].weight)
                         )
@@ -1204,12 +1286,15 @@ class GSparseMixedOp(MixedOp):
 
     def forward(self, x, edge_data):
         """
-        Output of operations like Identity(), that do not have weighted suboperations
+        Output of operations like Identity() that do not have weighted suboperations
         like Conv2d(), are multipled with the weight parameter attached to them, so
         that these weights are optimized as well, during the training phase.
         """
         summed = 0
         for op in self.primitives:
+            # Skip pruned placeholder slots entirely
+            if getattr(op, "was_pruned_slot", False):
+                continue
             try:
                 len(op.op)
                 summed += op(x, None)

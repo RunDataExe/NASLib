@@ -442,13 +442,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         For parameter-less ops where you attached 'weight', this is included too.
         """
         params = list(prim.parameters())
-        # ! tying with and without requires_grad
-        params = [p for p in params]
-        # params = [p for p in params if p.requires_grad]
+        n_tensors = len(params)
+        n_elems = int(sum(p.numel() for p in params))
         logger.info(
-            "Primitive %s: %d trainable params collected.",
+            "Primitive %s: %d parameter tensors (%d elements) collected.",
             type(prim).__name__,
-            len(params),
+            n_tensors,
+            n_elems,
         )
         return params
 

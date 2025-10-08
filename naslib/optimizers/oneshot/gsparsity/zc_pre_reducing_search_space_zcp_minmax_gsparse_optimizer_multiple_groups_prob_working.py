@@ -1338,21 +1338,36 @@ class GSparseMixedOp(MixedOp):
         that these weights are optimized as well, during the training phase.
         """
         summed = 0
+        n_active = 0
         for op in self.primitives:
-            # Skip pruned placeholder slots entirely
             if getattr(op, "was_pruned_slot", False):
                 continue
-            try:
-                len(op.op)
-                summed += op(x, None)
-            except AttributeError:
-                if op.training and edge_data.has("alpha"):
-                    summed += op.weight * op(x, None)
-                else:
-                    summed += op(x, None)
-
-        # summed = torch.nn.functional.normalize(summed)
+            out = op(x, None)
+            if hasattr(op, "weight"):
+                out = op.weight * out
+            summed = out if summed is None else (summed + out)
+            n_active += 1
+            # Optional: stabilize scale by averaging (uncomment if desired)
+            # if n_active > 0:
+            #     summed = summed / n_active
         return summed
+
+        # summed = 0
+        # for op in self.primitives:
+        #     # Skip pruned placeholder slots entirely
+        #     if getattr(op, "was_pruned_slot", False):
+        #         continue
+        #     try:
+        #         len(op.op)
+        #         summed += op(x, None)
+        #     except AttributeError:
+        #         if op.training and edge_data.has("alpha"):
+        #             summed += op.weight * op(x, None)
+        #         else:
+        #             summed += op(x, None)
+
+        # # summed = torch.nn.functional.normalize(summed)
+        # return summed
 
     # The following functions are obsolete because of the forward implementation but are needed due to the inheritance
     def get_weights(self, edge_data):

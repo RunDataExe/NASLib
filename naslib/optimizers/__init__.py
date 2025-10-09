@@ -1,5 +1,7 @@
 from .oneshot.darts.optimizer import DARTSOptimizer
-from .oneshot.gsparsity.gsparsity_optimizer import GSparseOptimizer
+from .oneshot.gsparsity.old_versions.pre_score_pruning_l2_final_discretication_decision_scaling.gsparsity_optimizer import (
+    GSparseOptimizer,
+)
 from .oneshot.gsparsity.zcp_minmax_gsparse_optimizer import ZCP_GSparseOptimizer
 from .oneshot.gsparsity.inverted_bananas_optimizer import Inverted_Bananas
 from .oneshot.gsparsity.inverted_bananas_gsparse_optimizer import (

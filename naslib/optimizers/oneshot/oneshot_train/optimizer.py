@@ -4,7 +4,7 @@ import numpy as np
 
 from naslib.search_spaces.core.primitives import MixedOp
 from naslib.search_spaces.nasbench301.conversions import Genotype
-from naslib.optimizers import DARTSOptimizer
+from naslib.optimizers.oneshot.darts.optimizer import DARTSOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +46,23 @@ class OneShotNASOptimizer(DARTSOptimizer):
         arch_learning_rate: float = 0.0003,
         arch_weight_decay: float = 0.001,
         epochs: int = 50,
-        op_optimizer: str = 'SGD',
-        arch_optimizer: str = 'Adam',
-        loss_criteria: str = 'CrossEntropyLoss',
-        **kwargs
+        op_optimizer: str = "SGD",
+        arch_optimizer: str = "Adam",
+        loss_criteria: str = "CrossEntropyLoss",
+        **kwargs,
     ):
-
-        super().__init__(learning_rate, momentum, weight_decay, grad_clip, unrolled, arch_learning_rate, arch_weight_decay, op_optimizer, arch_optimizer, loss_criteria)
+        super().__init__(
+            learning_rate,
+            momentum,
+            weight_decay,
+            grad_clip,
+            unrolled,
+            arch_learning_rate,
+            arch_weight_decay,
+            op_optimizer,
+            arch_optimizer,
+            loss_criteria,
+        )
 
     def step(self, data_train, data_val):
         input_train, target_train = data_train
@@ -83,7 +93,9 @@ class OneShotNASOptimizer(DARTSOptimizer):
             assert type(arch_encoding) in [
                 list,
                 np.ndarray,
-            ], "nasbench201 requires a list of ints of size 6 in order to query the one-shot model."
+            ], (
+                "nasbench201 requires a list of ints of size 6 in order to query the one-shot model."
+            )
 
             with torch.no_grad():
                 for i, op_index in enumerate(arch_encoding):
@@ -94,9 +106,9 @@ class OneShotNASOptimizer(DARTSOptimizer):
                     self.architectural_weights[i].copy_(_new_alpha)
 
         elif self.graph.get_type() == "nasbench301":
-            assert (
-                type(arch_encoding) is Genotype
-            ), "darts requires a Genotype object in order to query the one-shot model."
+            assert type(arch_encoding) is Genotype, (
+                "darts requires a Genotype object in order to query the one-shot model."
+            )
 
             def update_alphas(cell_type, alphas):
                 n_inputs = 2

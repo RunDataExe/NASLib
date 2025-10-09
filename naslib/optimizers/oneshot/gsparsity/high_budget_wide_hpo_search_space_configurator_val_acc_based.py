@@ -17,37 +17,57 @@ import torch.multiprocessing as tmp
 from optuna.trial import TrialState, FrozenTrial
 
 from naslib.optimizers import (
-    RandomSearch,
     LocalSearch,
     Bananas,
-    GSparseOptimizer,
     DrNASOptimizer,
-    ZCP_GSparseOptimizer,
-    Inverted_Bananas,
-    Inverted_Bananas_GsparseOptimizer,
-    Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.darts_optimizer import (
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.random_search_optimizer import (
+    RandomSearch,
+)
+
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.darts_optimizer import (
     DARTSOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
-    ZCP_GSparseOptimizer as ZCP_GSparseOptimizer,
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.gs_nas import (
+    ZCP_GSparseOptimizer as GSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_pre_pruning_gs_nas import (
+    ZCP_GSparseOptimizer as PreZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_pre_pruning_zcp_scaling_gs_nas import (
+    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_scaling_gs_nas import (
+    ZCP_GSparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
+    Inverted_Bananas,
+)
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
+    Inverted_Bananas_GsparseOptimizer,
+)
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
+    Inverted_Bananas_ZCP_GsparseOptimizer,
+)
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
+    Bananas as SelfTrainingBananas,
+)
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
 )
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
-    Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
+    Inverted_Bananas as SelfTrainingInvertedBananas,
 )
 
-from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_Gsparse import (
-    GSparseOptimizer as PreZCPGSParseOptimizer,
-)
-from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_zcp_minmax_gsparse_optimizer import (
-    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+    Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
 )
 
 from naslib import utils
@@ -1244,7 +1264,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed, tria
     elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":
         optimizer = SelfTrainingInvertedBananasZCPGsparse(config)
     elif optimizer_type == "zcp-pre_gsparsity":
-        optimizer = PreZCPGSParseOptimizer(config)
+        optimizer = PreZCPGSparseOptimizer(config)
     elif optimizer_type == "zcp-pre_zcp_gsparsity":
         optimizer = PreZCPZCPGSparseOptimizer(config)
     else:

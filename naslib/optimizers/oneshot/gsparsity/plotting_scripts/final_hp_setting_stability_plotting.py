@@ -641,6 +641,7 @@ def main():
     parser.add_argument(
         "--root_dir",
         type=str,
+        default="naslib/optimizers/oneshot/gsparsity/result_final_hp",
         help="The root directory containing the experiment runs (e.g., 'testv3/').",
     )
     parser.add_argument(

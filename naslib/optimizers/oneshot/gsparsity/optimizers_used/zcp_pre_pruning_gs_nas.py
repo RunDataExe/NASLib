@@ -117,7 +117,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         n_active += 1
 
         graph.update_edges(_check, scope=scope, private_edge_data=True)
-        logger.info(
+        logger.debug(
             f"[check] edges={n_edges} active_prims={n_active} pruned_placeholders={n_pruned} bad_pruned_with_params={n_bad}"
         )
         assert n_bad == 0, (
@@ -138,8 +138,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
         graph.update_edges(_dump, scope=scope, private_edge_data=True)
         for e, names in counts[:12]:
-            logger.info(f"{e} : {names}")
-        logger.info(f"edges listed: {len(counts)}")
+            logger.debug(f"{e} : {names}")
+        logger.debug(f"edges listed: {len(counts)}")
 
     def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
         op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
@@ -151,7 +151,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             f"op_scores_{self.dataset}_{self.zcp_method}_seed{self.config.search.seed}.json",
         )
         if not os.path.exists(fname):
-            logger.info(f"Precomputed op ZCP file not found: {fname}")
+            logger.debug(f"Precomputed op ZCP file not found: {fname}")
             return False
 
         with open(fname, "r") as f:
@@ -193,7 +193,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                             try:
                                 prim.op[j].zero_cost_proxy = float(leaf_scores.pop(0))
                             except Exception as e:
-                                logger.info("Failed assigning j-level ZCP: %s", e)
+                                logger.debug("Failed assigning j-level ZCP: %s", e)
                     # k-level (if any remain)
                     if leaf_scores:
                         for j in range(J):
@@ -216,14 +216,14 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     try:
                         prim.zero_cost_proxy = float(prim_score)
                     except Exception as e:
-                        logger.info("Failed assigning primitive-level ZCP: %s", e)
+                        logger.debug("Failed assigning primitive-level ZCP: %s", e)
 
                 if leaf_scores:
                     logger.warning(
                         "Unconsumed leaf_scores remain for a primitive; JSON and graph structure may differ."
                     )
 
-        logger.info(
+        logger.debug(
             "Loaded and applied precomputed per-op ZCPs from %s (normalized=%s)",
             fname,
             normalized,
@@ -237,12 +237,12 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         This should only be called once.
         """
         if self._load_and_apply_precomputed_op_scores(graph, scope):
-            logger.info(
+            logger.debug(
                 "Applied precomputed per-operation ZCP scores (already normalized)."
             )
             return
 
-        logger.info(
+        logger.debug(
             "Calculating all ZCP scores once (method=%s, dataset=%s, scope=%s).",
             self.zcp_method,
             self.dataset,
@@ -268,7 +268,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         input_shape = prim.shapes["input_shape"]
                         output_shape = prim.shapes["output_shape"]
                     except (AttributeError, KeyError, TypeError):
-                        logger.info(
+                        logger.debug(
                             "Skip scoring edge(%s->%s) prim=%d (missing shapes).",
                             edge.head,
                             edge.tail,
@@ -285,7 +285,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                             dataset=self.dataset,
                         )
                     except Exception as exc:
-                        logger.info(
+                        logger.debug(
                             "Failed scoring edge(%s->%s) prim=%d (%s).",
                             edge.head,
                             edge.tail,
@@ -296,7 +296,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     prim.zero_cost_proxy = score
                     raw_zero_cost_proxy_scores.append(score)
                     scored_counter["n"] += 1
-                    logger.info(
+                    logger.debug(
                         "ZCP raw score edge(%s->%s) prim=%d %s: %.6f",
                         edge.head,
                         edge.tail,
@@ -308,7 +308,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         graph.update_edges(
             collect_zero_cost_proxy_scores, scope=scope, private_edge_data=True
         )
-        logger.info("Computed raw ZCP scores for %d ops.", scored_counter["n"])
+        logger.debug("Computed raw ZCP scores for %d ops.", scored_counter["n"])
 
         if not raw_zero_cost_proxy_scores:
             logger.warning("ZCP scores list is empty. Skipping normalization.")
@@ -318,7 +318,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             min(raw_zero_cost_proxy_scores),
             max(raw_zero_cost_proxy_scores),
         )
-        logger.info(
+        logger.debug(
             "Raw ZCP scores range: [%.6f, %.6f]", float(min_zcp), float(max_zcp)
         )
 
@@ -332,7 +332,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     np.log(max_val + 1e-9) - np.log(min_val + 1e-9)
                 )
 
-            logger.info("Using 'params' log-normalization for ZCP.")
+            logger.debug("Using 'params' log-normalization for ZCP.")
         elif self.zcp_method == "synflow":
 
             def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
@@ -343,7 +343,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     np.log(max_val + shift) - np.log(min_val + shift)
                 )
 
-            logger.info("Using 'synflow' shifted log-normalization for ZCP.")
+            logger.debug("Using 'synflow' shifted log-normalization for ZCP.")
         else:
 
             def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
@@ -351,7 +351,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     return 1.0
                 return (raw_score - min_val) / (max_val - min_val)
 
-            logger.info("Using linear normalization for ZCP.")
+            logger.debug("Using linear normalization for ZCP.")
 
         normalized_counter = {"n": 0}
 
@@ -366,7 +366,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     before = float(prim.zero_cost_proxy)
                     prim.zero_cost_proxy = normalize(before)
                     normalized_counter["n"] += 1
-                    logger.info(
+                    logger.debug(
                         "ZCP normalized edge(%s->%s) prim=%d %s: %.6f -> %.6f",
                         edge.head,
                         edge.tail,
@@ -379,7 +379,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         graph.update_edges(
             normalize_and_apply_scores, scope=scope, private_edge_data=True
         )
-        logger.info(
+        logger.debug(
             "Completed ZCP normalization. Applied to %d ops.", normalized_counter["n"]
         )
 
@@ -454,7 +454,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         def _collect(edge):
             if edge.data.has("alpha") and hasattr(edge.data.op, "primitives"):
                 n_prims = len(edge.data.op.primitives)
-                logger.info(
+                logger.debug(
                     "Visit edge(%s->%s): %d primitives.", edge.head, edge.tail, n_prims
                 )
                 for i, prim in enumerate(edge.data.op.primitives):
@@ -462,7 +462,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     if getattr(prim, "was_pruned_slot", False):
                         continue
                     items.append((edge, i, prim))
-                    logger.info(
+                    logger.debug(
                         "Edge (%s->%s) prim=%d %s actually collected.",
                         edge.head,
                         edge.tail,
@@ -471,7 +471,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     )
 
         graph.update_edges(_collect, scope=scope, private_edge_data=True)
-        logger.info(
+        logger.debug(
             "Collected %d (edge, prim) pairs in scope %s.", len(items), str(scope)
         )
         return items
@@ -482,7 +482,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         key = f"edge({edge.head},{edge.tail})_prim{prim_idx}"
         # Very frequent; keep at debug if needed
-        logger.info("Group key resolved: %s", key)
+        logger.debug("Group key resolved: %s", key)
         return key
 
     def _collect_leaf_modules_with_zcp(self, prim):
@@ -508,7 +508,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         for c in prim.children():
             visit(c)
 
-        logger.info(
+        logger.debug(
             "Primitive %s: collected %d leaf ZCP modules.",
             type(prim).__name__,
             len(leaves),
@@ -520,7 +520,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         Return the primitive-level normalized ZCP score.
         """
         val = float(getattr(prim, "zero_cost_proxy", default))
-        logger.info("Primitive %s: ZCP=%.6f.", type(prim).__name__, val)
+        logger.debug("Primitive %s: ZCP=%.6f.", type(prim).__name__, val)
         return val
 
     def _primitive_params(self, prim):
@@ -531,7 +531,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         params = list(prim.parameters())
         n_tensors = len(params)
         n_elems = int(sum(p.numel() for p in params))
-        logger.info(
+        logger.debug(
             "Primitive %s: %d parameter tensors (%d elements) collected.",
             type(prim).__name__,
             n_tensors,
@@ -564,7 +564,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         total_groups = len(groups)
         total_params = sum(len(v["params"]) for v in groups.values())
         total_zcp_vals = sum(len(v["zcp_vals"]) for v in groups.values())
-        logger.info(
+        logger.debug(
             "[init groups] groups=%d, total_params=%d, total_zcp_vals=%d (scaling=%s)",
             total_groups,
             total_params,
@@ -577,7 +577,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             for k, v in groups.items():
                 zcps = v["zcp_vals"]
                 group_scores[k] = float(np.median(zcps)) if zcps else 0.0
-                logger.info(
+                logger.debug(
                     "Group %s: median aggregated ZCP=%.6f from %d values.",
                     k,
                     group_scores[k],
@@ -588,7 +588,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             # uniform scaling
             scales = {k: 1.0 for k in groups.keys()}
             group_scores = {k: None for k in groups.keys()}
-            logger.info(
+            logger.debug(
                 "ZCP scaling disabled: using uniform weight_decay=base_mu for all groups."
             )
 
@@ -610,7 +610,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 "n_params": len(v["params"]),
                 "n_zcp": len(v["zcp_vals"]),
             }
-            logger.info(
+            logger.debug(
                 "Param group %s: n_params=%d, median_zcp=%s, scale=%.6f, weight_decay=%.6f",
                 k,
                 len(v["params"]),
@@ -620,7 +620,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             )
             param_groups.append(pg)
 
-        logger.info(
+        logger.debug(
             "Finalized %d param groups (scaling=%s).",
             len(param_groups),
             str(enable_zcp_scaling),
@@ -642,12 +642,12 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             for pg in optimizer.param_groups:
                 pg["weight_decay"] = float(base_mu)
                 pg["zcp_scale"] = 1.0
-            logger.info(
+            logger.debug(
                 "ZCP scaling disabled: refreshed all groups to uniform weight_decay=%.6f.",
                 float(base_mu),
             )
             return
-        logger.info(
+        logger.debug(
             "Refreshing group weight_decay from ZCP (base_mu=%.6f).", float(base_mu)
         )
         self._calculate_and_set_zcp_scores(graph, scope)
@@ -662,7 +662,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         total_groups = len(groups)
         total_zcp_vals = sum(len(v) for v in groups.values())
         avg_zcp_per_group = total_zcp_vals / total_groups if total_groups else 0.0
-        logger.info(
+        logger.debug(
             "[refresh groups] groups=%d, total_zcp_vals=%d, avg_zcp/group=%.2f",
             total_groups,
             total_zcp_vals,
@@ -675,7 +675,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         for pg in optimizer.param_groups:
             key = pg.get("group_key", None)
             if key is None or key not in groups:
-                logger.info("Skip optimizer group without matching key: %s", str(key))
+                logger.debug("Skip optimizer group without matching key: %s", str(key))
                 continue
             gscore = float(np.median(groups[key])) if groups[key] else 0.0
             scale = max(1.0 - gscore, 1e-9)
@@ -690,7 +690,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             total_params += n_params
 
             updated += 1
-            logger.info(
+            logger.debug(
                 "Updated group %s: n_params=%d, n_zcp=%d, median_zcp=%.6f, "
                 "scale=%.6f, weight_decay=%.6f",
                 key,
@@ -701,7 +701,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 float(pg["weight_decay"]),
             )
 
-        logger.info(
+        logger.debug(
             "Refreshed weight_decay for %d optimizer groups (total_params=%d).",
             updated,
             total_params,
@@ -735,7 +735,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         # 0) PRE-REDUCTION PHASE (architecture-level ZC pruning)
         # ------------------------------------------------------------------
         add_betas_to_edges(graph, scope=scope)
-        logger.info("Added beta parameters to search space edges.")
+        logger.debug("Added beta parameters to search space edges.")
 
         # Always reapply pruning from checkpoint if resuming (shape consistency),
         # otherwise gate pruning by the new flag.
@@ -748,7 +748,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     self.pruned_op_indices = state.state_dict()["pruned_op_indices"]
                 elif isinstance(state, dict):
                     self.pruned_op_indices = state["pruned_op_indices"]
-                logger.info(
+                logger.debug(
                     "Loaded %d pruned architectures from checkpoint.",
                     len(self.pruned_op_indices),
                 )
@@ -762,7 +762,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
 
         # Option B: use pre-computed zc scores to prune
         if self.enable_pre_zc_pruning:
-            logger.info("Pre ZC pruning enabled by config flag.")
+            logger.debug("Pre ZC pruning enabled by config flag.")
             if (
                 hasattr(self.config.search, "pre_computed_zc_scores")
                 and getattr(self.config.search, "pre_computed_zc_scores")
@@ -783,7 +783,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                     "arch_scores_", "arch_scores_duration_"
                 )
                 if os.path.exists(duration_path):
-                    logger.info(
+                    logger.debug(
                         f"Loading zero-cost scores from {getattr(self.config.search, 'pre_computed_zc_scores')}"
                     )
                     with open(pre_computed_zc_scores_path, "r") as f:
@@ -827,20 +827,20 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                             scope=scope,
                             representation_type="op_indices",
                         )
-                    logger.info(
+                    logger.debug(
                         "Removed %d architectures from the search space.",
                         len(worst_set),
                     )
 
             # Option C: on-the-fly scoring and pruning (full space)
             else:
-                logger.info(
+                logger.debug(
                     "No resume path or pre-computed ZC scores found. Pruning from full search space."
                 )
                 arch_list = [
                     list(op_indices) for op_indices in graph.get_arch_iterator()
                 ]
-                logger.info(
+                logger.debug(
                     "Enumerating %d architectures (full space).", len(arch_list)
                 )
 
@@ -871,11 +871,11 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         scope=scope,
                         representation_type="op_indices",
                     )
-                logger.info(
+                logger.debug(
                     "Removed %d architectures from the search space.", len(worst_set)
                 )
         else:
-            logger.info("Pre ZC pruning disabled by config flag.")
+            logger.debug("Pre ZC pruning disabled by config flag.")
 
         # ------------------------------------------------------------------
         # 1) NOW add alpha/weights sized to the PRUNED op lists
@@ -911,7 +911,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         if self.enable_zcp_scaling:
             self._calculate_and_set_zcp_scores(self.graph, self.scope)
         else:
-            logger.info("ZCP scoring & scaling disabled: skipping score computation.")
+            logger.debug("ZCP scoring & scaling disabled: skipping score computation.")
         param_groups = self._build_param_groups_with_zcp(
             self.graph,
             self.scope,
@@ -1004,7 +1004,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 for i in range(len(edge.data.op.primitives)):
                     # Skip pruned slots
                     if getattr(edge.data.op.primitives[i], "was_pruned_slot", False):
-                        logger.info(
+                        logger.debug(
                             "Skip L2 weight update for pruned slot edge(%s->%s) prim=%d %s",
                             edge.head,
                             edge.tail,
@@ -1283,7 +1283,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             + ", {}".format(np.max(torch.sqrt(a).detach().cpu().numpy()))
             for a in self.operation_weights
         ]
-        logger.info(
+        logger.debug(
             "Arch weights (normalized weights, last column max): \n{}".format(
                 "\n".join(weights_str)
             )
@@ -1298,12 +1298,14 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
     def after_training(self):
         print("save path: ", self.config.save)
         if not self.best_arch:
-            logger.info(
+            logger.debug(
                 "Best arch not computed during last epoch's test_statistics. Computing now."
             )
             self.best_arch = self.get_final_architecture()
 
-        logger.info("Final architecture after search:\n" + self.best_arch.modules_str())
+        logger.debug(
+            "Final architecture after search:\n" + self.best_arch.modules_str()
+        )
 
     def get_op_optimizer(self):
         """
@@ -1327,7 +1329,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
-        logger.info(
+        logger.debug(
             "Saving checkpoint with %d pruned architectures.",
             len(self.pruned_op_indices),
         )

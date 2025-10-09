@@ -13,7 +13,7 @@ def _script_header(optimizer, dataset, seed, zcp_method=None):
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=32
 #SBATCH --job-name=wide_hpo_{optimizer}_{dataset}_{seed}{job_suffix}
-#SBATCH --output=naslib/optimizers/oneshot/gsparsity/results/slurm/wide_hpo_{optimizer}_{dataset}_{seed}{zcp_out_suffix}_%j.out
+#SBATCH --output=naslib/optimizers/oneshot/gsparsity/results_wide_hpo/slurm/wide_hpo_{optimizer}_{dataset}_{seed}{zcp_out_suffix}_%j.out
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=ruben.weber@students.uni-mannheim.de
 
@@ -78,6 +78,7 @@ def main():
         # "inverted_bananas_zcp_gsparsity",
     ]
     datasets = ["cifar100", "ImageNet16-120"]
+    # datasets = ["ImageNet16-120"]
     zcp_method = ["jacov", "params", "synflow"]
     seed = 2152435495
 

@@ -12,11 +12,6 @@ import time
 import torch
 import numpy as np
 
-from naslib.optimizers import (
-    LocalSearch,
-    Bananas,
-    DrNASOptimizer,
-)
 
 from naslib.optimizers.oneshot.gsparsity.optimizers_used.random_search_optimizer import (
     RandomSearch,

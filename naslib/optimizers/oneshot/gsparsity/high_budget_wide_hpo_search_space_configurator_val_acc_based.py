@@ -16,12 +16,6 @@ import torch.multiprocessing as tmp
 
 from optuna.trial import TrialState, FrozenTrial
 
-from naslib.optimizers import (
-    LocalSearch,
-    Bananas,
-    DrNASOptimizer,
-)
-
 from naslib.optimizers.oneshot.gsparsity.optimizers_used.random_search_optimizer import (
     RandomSearch,
 )

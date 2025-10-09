@@ -1203,7 +1203,7 @@ def update_config(
     else:
         # Use the existing computational factor for query-based methods
         comp_factor_path = os.path.join(
-            "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor_0_workers",
+            "naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor",
             dataset,
             "results.json",
         )

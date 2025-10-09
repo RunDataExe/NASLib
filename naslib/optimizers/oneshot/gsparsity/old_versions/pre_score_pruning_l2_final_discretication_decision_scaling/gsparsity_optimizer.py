@@ -2,15 +2,12 @@ from dataclasses import replace
 from distutils.command.config import config
 from locale import normalize
 import logging
-import os
-from random import random
 from turtle import pos, position
 from matplotlib.colors import NoNorm
 import torch.nn.utils.parametrize as P
 import torch
 from collections.abc import Iterable
-from naslib.utils import SimpleStateDict
-import json
+
 from naslib.search_spaces.core.primitives import MixedOp
 from naslib.optimizers.core.metaclasses import MetaOptimizer
 from naslib.utils import count_parameters_in_MB
@@ -20,13 +17,6 @@ from naslib.optimizers.oneshot.gsparsity.ProxSGD_for_groups import ProxSGD
 import naslib.search_spaces.core.primitives as primitives
 
 import numpy as np
-from naslib.predictors.zerocost import ZeroCost
-from naslib.utils.remove_arch_from_search_space import (
-    add_betas_to_edges,
-    remove_architecture,
-)
-from naslib.predictors.zerocost import ZeroCost
-from naslib.search_spaces.nasbench201.graph import NasBench201SearchSpace
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +30,7 @@ class GSparseOptimizer(MetaOptimizer):
     """
 
     mu = 0
+    using_step_function = True
 
     def __init__(
         self,
@@ -76,12 +67,10 @@ class GSparseOptimizer(MetaOptimizer):
         self.threshold = config.search.threshold
         self.normalization = config.search.normalization
         self.normalization_exponent = config.search.normalization_exponent
-        self.train_loader = None
         self.operation_weights = torch.nn.ParameterList()
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )  #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
-        self.pruned_op_indices = []  # List of op_indices to prune
         self.best_arch = None
 
     @staticmethod
@@ -112,7 +101,7 @@ class GSparseOptimizer(MetaOptimizer):
         )
         edge.data.set("alpha", alpha, shared=True)
         edge.data.set("weights", weights, shared=True)
-        edge.data.set("dimension", weights, shared=True)
+        edge.data.set("dimension", dimension, shared=True)
 
     @staticmethod
     def add_weights(edge):
@@ -135,15 +124,7 @@ class GSparseOptimizer(MetaOptimizer):
                 )
                 edge.data.op[i].register_parameter("weight", weight)
 
-    def adapt_search_space(
-        self,
-        search_space,
-        train_loader,
-        scope=None,
-        resume_from_path=None,
-        dataset_api=None,
-        **kwargs,
-    ):
+    def adapt_search_space(self, search_space, scope=None, dataset_api=None, **kwargs):
         """
         Modify the search space to fit the optimizer's needs,
         e.g. discretize, add alpha flag and shared weight parameter, ...
@@ -153,224 +134,37 @@ class GSparseOptimizer(MetaOptimizer):
                 should be optimized by the optimizer.
         """
         self.search_space = search_space
-        self.train_loader = train_loader
         self.dataset_api = dataset_api
-        self.graph = search_space
+        graph = search_space.clone()
 
         # If there is no scope defined, let's use the search space default one
         if not scope:
-            scope = self.graph.OPTIMIZER_SCOPE
+            scope = graph.OPTIMIZER_SCOPE
 
         # 1. add alpha flags for pruning
-        self.graph.update_edges(
+        graph.update_edges(
             self.__class__.add_alphas, scope=scope, private_edge_data=False
         )
 
-        # Add betas for pruning
-        add_betas_to_edges(self.graph, scope=scope)
-        logger.info("Added beta parameters to search space edges.")
-
-        if resume_from_path and os.path.exists(resume_from_path):
-            checkpoint = torch.load(resume_from_path, map_location="cpu")
-            logger.debug("Checkpoint keys: %s", list(checkpoint.keys()))
-
-            if "pruned_op_indices" in checkpoint:
-                # checkpoint["pruned_op_indices"] is a SimpleStateDict instance
-                state = checkpoint["pruned_op_indices"]
-                # If loaded by fvcore, it will be an instance; if loaded by torch.load, it may be a dict
-                if hasattr(state, "state_dict"):
-                    self.pruned_op_indices = state.state_dict()["pruned_op_indices"]
-                elif isinstance(state, dict):
-                    self.pruned_op_indices = state["pruned_op_indices"]
-                logger.info(
-                    "Loaded %d pruned architectures from checkpoint.",
-                    len(self.pruned_op_indices),
-                )
-                for op_indices in self.pruned_op_indices:
-                    remove_architecture(
-                        self.graph, op_indices, representation_type="op_indices"
-                    )
-
-        elif (
-            hasattr(self.config.search, "pre_computed_zc_scores")
-            and getattr(self.config.search, "pre_computed_zc_scores")
-            and os.path.exists(
-                (
-                    getattr(self.config.search, "pre_computed_zc_scores")
-                    + "_"
-                    + self.config.dataset
-                    + ".json"
-                )
-            )
-        ):
-            pre_computed_zc_scores_path = (
-                getattr(self.config.search, "pre_computed_zc_scores")
-                + "_"
-                + self.config.dataset
-                + ".json"
-            )
-            duration_path = pre_computed_zc_scores_path.replace(
-                "arch_scores_", "arch_scores_duration_"
-            )
-            if os.path.exists(duration_path):
-                logger.info(
-                    f"Loading zero-cost scores from {getattr(self.config.search, 'pre_computed_zc_scores')}"
-                )
-                with open(pre_computed_zc_scores_path, "r") as f:
-                    scores = json.load(f)
-
-                # Build score arrays and map by tuple(op_indices)
-                op_to_score = {
-                    tuple(entry["op_indices"]): {
-                        "jacov": entry["jacov"],
-                        "synflow": entry["synflow"],
-                        "params": entry["params"],
-                    }
-                    for entry in scores
-                }
-
-                jacov_scores = []
-                synflow_scores = []
-                param_scores = []
-                arch_list = [
-                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
-                ]
-                arch_tuples = [tuple(op) for op in arch_list]
-
-                # Rebuild score lists in same order as current arch_list
-                for arch in arch_tuples:
-                    score = op_to_score[arch]
-                    jacov_scores.append(score["jacov"])
-                    synflow_scores.append(score["synflow"])
-                    param_scores.append(score["params"])
-
-                jacov_scores = np.array(jacov_scores)
-                synflow_scores = np.array(synflow_scores)
-                param_scores = np.array(param_scores)
-
-                # Get indices of worst for each metric
-                worst_jacov = np.argsort(jacov_scores)[:750]
-                worst_synflow = np.argsort(synflow_scores)[:750]
-                worst_params = np.argsort(param_scores)[:750]
-
-                # Log the results
-                logger.debug("Worst 750 indices (jacov) count: %d", len(worst_jacov))
-                logger.debug(
-                    "Worst 750 indices (synflow) count: %d", len(worst_synflow)
-                )
-                logger.debug("Worst 750 indices (params) count: %d", len(worst_params))
-
-                # Find common worst indices across all three metrics
-                worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
-                logger.debug("Common worst indices count: %d", len(worst_set))
-
-                arch_list = [
-                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
-                ]
-                self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
-                logger.debug(
-                    "Iterator size before removal: %d",
-                    len(list(self.graph.get_arch_iterator())),
-                )
-
-                for idx in worst_set:
-                    logger.debug(
-                        "Removing architecture idx=%d, op_indices=%s",
-                        idx,
-                        arch_list[idx],
-                    )
-                    remove_architecture(
-                        self.graph, arch_list[idx], representation_type="op_indices"
-                    )
-                logger.info(
-                    "Removed %d architectures from the search space.",
-                    len(worst_set),
-                )
-        else:
-            logger.info(
-                "No resume path nor pre-computed zero-cost scores provided or paths do not exist. Starting architecture removal process with full search space."
-            )
-
-            # Enumerate all architectures (NASBench201 is small enough)
-            arch_list = [
-                list(op_indices) for op_indices in self.graph.get_arch_iterator()
-            ]
-            logger.info("Enumerating %d architectures (full space).", len(arch_list))
-
-            # import random  # <-- Add this import if not already present
-
-            # if len(arch_list) > 10:
-            #     arch_list = random.sample(arch_list, 10)
-
-            jacov_pred = ZeroCost(method_type="jacov")
-            synflow_pred = ZeroCost(method_type="synflow")
-            params_pred = ZeroCost(method_type="params")
-
-            jacov_scores = []
-            synflow_scores = []
-            param_scores = []
-
-            for idx, op_indices in enumerate(arch_list):
-                arch_graph = search_space.clone()
-                arch_graph.set_op_indices(op_indices)
-                arch_graph = arch_graph.to(self.device)
-                arch_graph.parse()
-                logger.debug("Scoring architecture %d: %s", idx, op_indices)
-                jacov = jacov_pred.query(arch_graph, self.train_loader)
-                logger.debug("Jacov score: %s", str(jacov))
-                synflow = synflow_pred.query(arch_graph, self.train_loader)
-                logger.debug("Synflow score: %s", str(synflow))
-                params = params_pred.query(arch_graph, self.train_loader)
-                logger.debug("Params score: %s", str(params))
-                jacov_scores.append(jacov)
-                synflow_scores.append(synflow)
-                param_scores.append(params)
-
-            logger.info("Finished scoring all architectures.")
-
-            # Get indices of worst 100 for each metric
-            worst_jacov = np.argsort(jacov_scores)[:750]
-            worst_synflow = np.argsort(synflow_scores)[:750]
-            worst_params = np.argsort(param_scores)[:750]
-            logger.debug("Worst 750 (jacov) count: %d", len(worst_jacov))
-            logger.debug("Worst 750 (synflow) count: %d", len(worst_synflow))
-            logger.debug("Worst 750 (params) count: %d", len(worst_params))
-
-            worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
-
-            self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
-
-            for idx in worst_set:
-                logger.debug(
-                    "Removing architecture idx=%d, op_indices=%s", idx, arch_list[idx]
-                )
-                remove_architecture(
-                    self.graph, arch_list[idx], representation_type="op_indices"
-                )
-            logger.info(
-                "Removed %d architectures from the search space.",
-                len(worst_set),
-            )
-
         # 2. add weight parameter to operations without weight
-        self.graph.update_edges(
+        graph.update_edges(
             self.__class__.add_weights, scope=scope, private_edge_data=True
         )
 
         # 3. replace primitives with mixed_op
-        self.graph.update_edges(
+        graph.update_edges(
             self.__class__.update_ops, scope=scope, private_edge_data=True
         )
 
-        for alpha in self.graph.get_all_edge_data("weights"):
+        for alpha in graph.get_all_edge_data("weights"):
             self.operation_weights.append(alpha)
 
-        self.graph.parse()
-        print(self.graph)
+        graph.parse()
+        print(graph)
 
         # initializing the ProxSGD optmizer for the operation weights
         self.op_optimizer = self.op_optimizer(
-            self.graph.parameters(),
+            graph.parameters(),
             lr=self.config.search.learning_rate,
             momentum=self.config.search.momentum,
             weight_decay=self.mu,
@@ -378,7 +172,8 @@ class GSparseOptimizer(MetaOptimizer):
             normalization=self.normalization,
             normalization_exponent=self.normalization_exponent,
         )
-        self.graph.train()
+        graph.train()
+        self.graph = graph
         self.scope = scope
 
     def step(self, data_train, data_val):
@@ -449,6 +244,7 @@ class GSparseOptimizer(MetaOptimizer):
                                     )
                                     ** 2
                                 ).item()
+                                # logger.info(f"Suboperation {j}")
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -470,6 +266,7 @@ class GSparseOptimizer(MetaOptimizer):
                                             )
                                             ** 2
                                         ).item()
+                                        # logger.info(f"Subsuboperation {k}")
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -484,6 +281,7 @@ class GSparseOptimizer(MetaOptimizer):
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2
                         edge.data.dimension[i] += size
+                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -588,7 +386,11 @@ class GSparseOptimizer(MetaOptimizer):
 
     def before_training(self):
         """
-        Remove the worst architectures before training.
+        Function called right before training starts. To be used as hook
+        for the optimizer.
+        """
+        """
+        Move the graph into cuda memory if available.
         """
         self.graph = self.graph.to(self.device)
         self.operation_weights = self.operation_weights.to(self.device)
@@ -623,6 +425,7 @@ class GSparseOptimizer(MetaOptimizer):
                                     )
                                     ** 2
                                 ).item()
+                                # logger.info(f"Suboperation {j}")
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -644,6 +447,7 @@ class GSparseOptimizer(MetaOptimizer):
                                             )
                                             ** 2
                                         ).item()
+                                        # logger.info(f"Subsuboperation {k}")
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -658,6 +462,7 @@ class GSparseOptimizer(MetaOptimizer):
                             edge.data.op.primitives[i].weight.item()
                         ) ** 2
                         edge.data.dimension[i] += size
+                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -701,6 +506,7 @@ class GSparseOptimizer(MetaOptimizer):
         super().new_epoch(epoch)
 
     def after_training(self):
+        print("save path: ", self.config.save)
         if not self.best_arch:
             logger.info(
                 "Best arch not computed during last epoch's test_statistics. Computing now."
@@ -708,8 +514,6 @@ class GSparseOptimizer(MetaOptimizer):
             self.best_arch = self.get_final_architecture()
 
         logger.info("Final architecture after search:\n" + self.best_arch.modules_str())
-        # The trainer will save the checkpoint, so we don't need to do it here.
-        # print("save path: ", self.config.save)
 
     def get_op_optimizer(self):
         """
@@ -729,20 +533,16 @@ class GSparseOptimizer(MetaOptimizer):
         Return all objects that should be saved in a checkpoint during training.
 
         Will be called after `before_training` and must include key "model".
+        `op_optimizer_evaluate` is a class reference for evaluation, not a stateful
+        object during search, so it's not included here.
 
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
-        logger.info(
-            "Saving checkpoint with %d pruned architectures.",
-            len(self.pruned_op_indices),
-        )
         return {
             "model": self.graph,
-            "op_optimizer": self.op_optimizer,
-            "pruned_op_indices": SimpleStateDict(
-                {"pruned_op_indices": self.pruned_op_indices}
-            ),
+            "op_optimizer": self.op_optimizer,  # This is an instance
+            # "op_optimizer_evaluate": self.op_optimizer_evaluate, # This is a CLASS, so don't save its state_dict
         }
 
 

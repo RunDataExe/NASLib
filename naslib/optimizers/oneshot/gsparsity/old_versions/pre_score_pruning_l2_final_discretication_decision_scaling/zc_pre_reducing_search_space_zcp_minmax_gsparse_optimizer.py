@@ -2,12 +2,14 @@ from dataclasses import replace
 from distutils.command.config import config
 from locale import normalize
 import logging
+import os
 from turtle import pos, position
 from matplotlib.colors import NoNorm
 import torch.nn.utils.parametrize as P
 import torch
 from collections.abc import Iterable
-
+from naslib.utils import SimpleStateDict
+import json
 from naslib.search_spaces.core.primitives import MixedOp
 from naslib.optimizers.core.metaclasses import MetaOptimizer
 from naslib.utils import count_parameters_in_MB
@@ -19,11 +21,14 @@ from naslib.utils.shape_annotator import ShapeAnnotator
 
 import math
 import numpy as np
-import os, json
-
 from naslib.optimizers.oneshot.gsparsity.operation_zero_cost_proxy_scoring import (
     evaluate_micro_architecture_zcp,
 )
+from naslib.utils.remove_arch_from_search_space import (
+    add_betas_to_edges,
+    remove_architecture,
+)
+from naslib.predictors.zerocost import ZeroCost
 
 logger = logging.getLogger(__name__)
 
@@ -78,97 +83,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.zcp_method = config.search.zcp_method
         self.train_loader = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.pruned_op_indices = []  # List of op_indices to prune
         self.best_arch = None
-
-    def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
-        op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
-        if not op_dir or not getattr(self.config.search, "zcp_method", None):
-            return False
-
-        fname = os.path.join(
-            op_dir,
-            f"op_scores_{self.dataset}_{self.zcp_method}_seed{self.config.search.seed}.json",
-        )
-        if not os.path.exists(fname):
-            logger.info(f"Precomputed op ZCP file not found: {fname}")
-            return False
-
-        with open(fname, "r") as f:
-            payload = json.load(f)
-
-        meta = payload.get("meta", {})
-        scores = payload.get("scores", [])
-        if not isinstance(scores, list) or not scores:
-            logger.warning(f"Precomputed op ZCP file malformed or empty: {fname}")
-            return False
-
-        normalized = bool(meta.get("normalized", False))
-
-        # Traverse edges/primitives exactly as used by weight accumulation
-        ops = graph.get_all_edge_data("op", scope=scope, private_edge_data=True)
-        expected = sum(len(getattr(m, "primitives", [])) for m in ops)
-        if len(scores) != expected:
-            logger.warning(
-                "Precomputed op ZCP shape mismatch. Falling back to on-the-fly computation."
-            )
-            return False
-
-        idx = 0
-        for mixed_op in ops:
-            prims = getattr(mixed_op, "primitives", [])
-            for prim in prims:
-                entry = scores[idx]
-                idx += 1
-
-                leaf_scores = list(entry.get("leaf_scores", []) or [])
-                prim_score = entry.get("primitive_score", None)
-
-                # Assign to j-level leaves first; then to k-level if leftovers exist
-                try:
-                    J = len(prim.op)
-                    # j-level
-                    for j in range(J):
-                        if leaf_scores:
-                            try:
-                                prim.op[j].zero_cost_proxy = float(leaf_scores.pop(0))
-                            except Exception as e:
-                                logger.debug("Failed assigning j-level ZCP: %s", e)
-                    # k-level (if any remain)
-                    if leaf_scores:
-                        for j in range(J):
-                            try:
-                                K = len(prim.op[j].op)
-                                for k in range(K):
-                                    if leaf_scores:
-                                        prim.op[j].op[k].zero_cost_proxy = float(
-                                            leaf_scores.pop(0)
-                                        )
-                            except AttributeError:
-                                continue
-                except AttributeError:
-                    # Simple primitive without children
-                    if leaf_scores:
-                        prim.zero_cost_proxy = float(leaf_scores.pop(0))
-
-                # Set primitive-level score if present
-                if prim_score is not None:
-                    try:
-                        prim.zero_cost_proxy = float(prim_score)
-                    except Exception as e:
-                        logger.debug("Failed assigning primitive-level ZCP: %s", e)
-
-                if leaf_scores:
-                    logger.warning(
-                        "Unconsumed leaf_scores remain for a primitive; JSON and graph structure may differ."
-                    )
-
-        logger.info(
-            "Loaded and applied precomputed per-op ZCPs from %s (normalized=%s)",
-            fname,
-            normalized,
-        )
-        self._zcp_compute_time = 0.0
-        return True
 
     def _calculate_and_set_zcp_scores(self, graph, scope):
         """
@@ -246,6 +162,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 return (np.log(raw_score + 1e-9) - np.log(min_val + 1e-9)) / (
                     np.log(max_val + 1e-9) - np.log(min_val + 1e-9)
                 )
+
         elif self.zcp_method == "synflow":
 
             def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
@@ -255,6 +172,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 return (np.log(raw_score + shift) - np.log(min_val + shift)) / (
                     np.log(max_val + shift) - np.log(min_val + shift)
                 )
+
         else:
 
             def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
@@ -313,7 +231,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         )
         edge.data.set("alpha", alpha, shared=True)
         edge.data.set("weights", weights, shared=True)
-        edge.data.set("dimension", weights, shared=True)
+        edge.data.set("dimension", dimension, shared=True)
         edge.data.set("zero_cost_proxy", zero_cost_proxy, shared=True)
 
     @staticmethod
@@ -338,7 +256,13 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 edge.data.op[i].register_parameter("weight", weight)
 
     def adapt_search_space(
-        self, search_space, scope=None, train_loader=None, dataset_api=None, **kwargs
+        self,
+        search_space,
+        scope=None,
+        resume_from_path=None,
+        train_loader=None,
+        dataset_api=None,
+        **kwargs,
     ):
         """
         Modify the search space to fit the optimizer's needs,
@@ -351,44 +275,229 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.search_space = search_space
         self.train_loader = train_loader
         self.dataset_api = dataset_api
-        graph = search_space.clone()
+        # graph = search_space.clone()
+        self.graph = search_space
 
         # If there is no scope defined, let's use the search space default one
         if not scope:
-            scope = graph.OPTIMIZER_SCOPE
+            scope = self.graph.OPTIMIZER_SCOPE
 
         # 1. add alpha flags for pruning
-        graph.update_edges(
+        self.graph.update_edges(
             self.__class__.add_alphas, scope=scope, private_edge_data=False
         )
+        # Add betas for pruning
+        add_betas_to_edges(self.graph, scope=scope)
+        logger.info("Added beta parameters to search space edges.")
+
+        if resume_from_path and os.path.exists(resume_from_path):
+            checkpoint = torch.load(resume_from_path, map_location="cpu")
+            logger.debug("Checkpoint keys: %s", list(checkpoint.keys()))
+
+            if "pruned_op_indices" in checkpoint:
+                # checkpoint["pruned_op_indices"] is a SimpleStateDict instance
+                state = checkpoint["pruned_op_indices"]
+                # If loaded by fvcore, it will be an instance; if loaded by torch.load, it may be a dict
+                if hasattr(state, "state_dict"):
+                    self.pruned_op_indices = state.state_dict()["pruned_op_indices"]
+                elif isinstance(state, dict):
+                    self.pruned_op_indices = state["pruned_op_indices"]
+                logger.info(
+                    "Loaded %d pruned architectures from checkpoint.",
+                    len(self.pruned_op_indices),
+                )
+                for op_indices in self.pruned_op_indices:
+                    remove_architecture(
+                        self.graph, op_indices, representation_type="op_indices"
+                    )
+
+        elif (
+            hasattr(self.config.search, "pre_computed_zc_scores")
+            and getattr(self.config.search, "pre_computed_zc_scores")
+            and os.path.exists(
+                (
+                    getattr(self.config.search, "pre_computed_zc_scores")
+                    + "_"
+                    + self.config.dataset
+                    + ".json"
+                )
+            )
+        ):
+            pre_computed_zc_scores_path = (
+                getattr(self.config.search, "pre_computed_zc_scores")
+                + "_"
+                + self.config.dataset
+                + ".json"
+            )
+            duration_path = pre_computed_zc_scores_path.replace(
+                "arch_scores_", "arch_scores_duration_"
+            )
+            if os.path.exists(duration_path):
+                logger.info(
+                    f"Loading zero-cost scores from {getattr(self.config.search, 'pre_computed_zc_scores')}"
+                )
+                with open(pre_computed_zc_scores_path, "r") as f:
+                    scores = json.load(f)
+
+                # Build score arrays and map by tuple(op_indices)
+                op_to_score = {
+                    tuple(entry["op_indices"]): {
+                        "jacov": entry["jacov"],
+                        "synflow": entry["synflow"],
+                        "params": entry["params"],
+                    }
+                    for entry in scores
+                }
+
+                jacov_scores = []
+                synflow_scores = []
+                param_scores = []
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                arch_tuples = [tuple(op) for op in arch_list]
+
+                # Rebuild score lists in same order as current arch_list
+                for arch in arch_tuples:
+                    score = op_to_score[arch]
+                    jacov_scores.append(score["jacov"])
+                    synflow_scores.append(score["synflow"])
+                    param_scores.append(score["params"])
+
+                jacov_scores = np.array(jacov_scores)
+                synflow_scores = np.array(synflow_scores)
+                param_scores = np.array(param_scores)
+
+                # Get indices of worst for each metric
+                worst_jacov = np.argsort(jacov_scores)[:750]
+                worst_synflow = np.argsort(synflow_scores)[:750]
+                worst_params = np.argsort(param_scores)[:750]
+
+                # Log the results
+                logger.debug("Worst 750 indices (jacov) count: %d", len(worst_jacov))
+                logger.debug(
+                    "Worst 750 indices (synflow) count: %d", len(worst_synflow)
+                )
+                logger.debug("Worst 750 indices (params) count: %d", len(worst_params))
+
+                # Find common worst indices across all three metrics
+                worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
+                logger.debug("Common worst indices count: %d", len(worst_set))
+
+                arch_list = [
+                    list(op_indices) for op_indices in self.graph.get_arch_iterator()
+                ]
+                self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
+                logger.debug(
+                    "Iterator size before removal: %d",
+                    len(list(self.graph.get_arch_iterator())),
+                )
+
+                for idx in worst_set:
+                    logger.debug(
+                        "Removing architecture idx=%d, op_indices=%s",
+                        idx,
+                        arch_list[idx],
+                    )
+                    remove_architecture(
+                        self.graph, arch_list[idx], representation_type="op_indices"
+                    )
+                logger.info(
+                    "Removed %d architectures from the search space.",
+                    len(worst_set),
+                )
+        else:
+            logger.info(
+                "No resume path nor pre-computed zero-cost scores provided or paths do not exist. Starting architecture removal process with full search space."
+            )
+
+            # Enumerate all architectures (NASBench201 is small enough)
+            arch_list = [
+                list(op_indices) for op_indices in self.graph.get_arch_iterator()
+            ]
+            logger.info("Enumerating %d architectures (full space).", len(arch_list))
+
+            # import random  # <-- Add this import if not already present
+
+            # if len(arch_list) > 10:
+            #     arch_list = random.sample(arch_list, 10)
+
+            jacov_pred = ZeroCost(method_type="jacov")
+            synflow_pred = ZeroCost(method_type="synflow")
+            params_pred = ZeroCost(method_type="params")
+
+            jacov_scores = []
+            synflow_scores = []
+            param_scores = []
+
+            for idx, op_indices in enumerate(arch_list):
+                arch_graph = search_space.clone()
+                arch_graph.set_op_indices(op_indices)
+                arch_graph = arch_graph.to(self.device)
+                arch_graph.parse()
+                logger.debug("Scoring architecture %d: %s", idx, op_indices)
+                jacov = jacov_pred.query(arch_graph, self.train_loader)
+                logger.info(f"Jacov score: {jacov}")
+                synflow = synflow_pred.query(arch_graph, self.train_loader)
+                logger.info(f"Synflow score: {synflow}")
+                params = params_pred.query(arch_graph, self.train_loader)
+                logger.info(f"Params score: {params}")
+                jacov_scores.append(jacov)
+                synflow_scores.append(synflow)
+                param_scores.append(params)
+
+            logger.info("Finished scoring all architectures.")
+
+            # Get indices of worst 100 for each metric
+            worst_jacov = np.argsort(jacov_scores)[:750]
+            worst_synflow = np.argsort(synflow_scores)[:750]
+            worst_params = np.argsort(param_scores)[:750]
+            logger.debug("Worst 750 (jacov) count: %d", len(worst_jacov))
+            logger.debug("Worst 750 (synflow) count: %d", len(worst_synflow))
+            logger.debug("Worst 750 (params) count: %d", len(worst_params))
+
+            worst_set = set(worst_jacov) & set(worst_synflow) & set(worst_params)
+
+            self.pruned_op_indices = [arch_list[idx] for idx in worst_set]
+
+            for idx in worst_set:
+                logger.debug(
+                    "Removing architecture idx=%d, op_indices=%s", idx, arch_list[idx]
+                )
+                remove_architecture(
+                    self.graph, arch_list[idx], representation_type="op_indices"
+                )
+            logger.info(
+                "Removed %d architectures from the search space.",
+                len(worst_set),
+            )
 
         # 2. add weight parameter to operations without weight
-        graph.update_edges(
+        self.graph.update_edges(
             self.__class__.add_weights, scope=scope, private_edge_data=True
         )
 
         # 3. replace primitives with mixed_op
-        graph.update_edges(
+        self.graph.update_edges(
             self.__class__.update_ops, scope=scope, private_edge_data=True
         )
 
-        for alpha in graph.get_all_edge_data("weights"):
+        for alpha in self.graph.get_all_edge_data("weights"):
             self.operation_weights.append(alpha)
 
-        graph.parse()
-        print(graph)
+        self.graph.parse()
+        print(self.graph)
 
         # 4. Annotate graph with shape information
         shape_annotator = ShapeAnnotator(self.config)
-        graph = shape_annotator.annotate_graph(graph)
+        self.graph = shape_annotator.annotate_graph(self.graph)
 
-        # --- FIX: Assign self.graph BEFORE using it ---
-        self.graph = graph
+        # --- FIX: Assign self.scope BEFORE using it ---
         self.scope = scope
 
         # initializing the ProxSGD optmizer for the operation weights
         self.op_optimizer = self.op_optimizer(
-            graph.parameters(),
+            self.graph.parameters(),
             lr=self.config.search.learning_rate,
             momentum=self.config.search.momentum,
             weight_decay=self.mu,
@@ -397,12 +506,11 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             normalization_exponent=self.normalization_exponent,
         )
 
-        # # Calculate ZCP scores once after shape annotation
+        # # Calculate ZCP scores once after shape annotation and initial pruning
         # self._calculate_and_set_zcp_scores(self.graph, self.scope)
 
         self.graph.train()
-        self.graph = graph
-        self.scope = scope
+        # self.scope = scope # This is now redundant
 
     def step(self, data_train, data_val):
         """
@@ -453,8 +561,10 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         graph.prepare_discretization()
         normalization_exponent = self.normalization_exponent
 
-        # Recalculate ZCP scores at the beginning of each epoch
+        # # Recalculate ZCP scores at the beginning of each epoch
         self._calculate_and_set_zcp_scores(self.graph, self.scope)
+        # The expensive ZCP calculation is removed from here.
+        # We now directly use the pre-calculated scores stored on the operations.
 
         def update_l2_weights(edge):
             """
@@ -479,14 +589,17 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item() * max(1 -
-                                    edge.data.op.primitives[i].op[j].zero_cost_proxy,
+                                ).item() * max(
+                                    1
+                                    - edge.data.op.primitives[i].op[j].zero_cost_proxy,
                                     0.000000001,
                                 )
                                 # was logger.info with f-string
                                 logger.debug(
                                     "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
-                                    max(1 - edge.data.op.primitives[i]
+                                    max(
+                                        1
+                                        - edge.data.op.primitives[i]
                                         .op[j]
                                         .zero_cost_proxy,
                                         1e-9,
@@ -515,8 +628,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item() * max(1 -
-                                            edge.data.op.primitives[i]
+                                        ).item() * max(
+                                            1
+                                            - edge.data.op.primitives[i]
                                             .op[j]
                                             .op[k]
                                             .zero_cost_proxy,
@@ -525,8 +639,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         # was logger.info with f-string
                                         logger.debug(
                                             "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
-                                            max(1 -
-                                                edge.data.op.primitives[i]
+                                            max(
+                                                1
+                                                - edge.data.op.primitives[i]
                                                 .op[j]
                                                 .op[k]
                                                 .zero_cost_proxy,
@@ -549,8 +664,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2 * max(1 - 
-                            edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
+                        ) ** 2 * max(
+                            1 - edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
                         )
                         # was logger.info with f-string
                         logger.debug(
@@ -679,7 +794,6 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         # Recalculate ZCP scores at the beginning of each epoch
         self._calculate_and_set_zcp_scores(self.graph, self.scope)
-
         normalization_exponent = self.normalization_exponent
 
         def update_l2_weights(edge):
@@ -705,15 +819,17 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item() * max(1 - 
-                                    edge.data.op.primitives[i].op[j].zero_cost_proxy,
+                                ).item() * max(
+                                    1
+                                    - edge.data.op.primitives[i].op[j].zero_cost_proxy,
                                     0.000000001,
                                 )
                                 # was logger.info with f-string
                                 logger.debug(
                                     "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
-                                    max(1 - 
-                                        edge.data.op.primitives[i]
+                                    max(
+                                        1
+                                        - edge.data.op.primitives[i]
                                         .op[j]
                                         .zero_cost_proxy,
                                         1e-9,
@@ -742,8 +858,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item() * max(1 - 
-                                            edge.data.op.primitives[i]
+                                        ).item() * max(
+                                            1
+                                            - edge.data.op.primitives[i]
                                             .op[j]
                                             .op[k]
                                             .zero_cost_proxy,
@@ -752,8 +869,9 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                                         # was logger.info with f-string
                                         logger.debug(
                                             "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
-                                            max(1 - 
-                                                edge.data.op.primitives[i]
+                                            max(
+                                                1
+                                                - edge.data.op.primitives[i]
                                                 .op[j]
                                                 .op[k]
                                                 .zero_cost_proxy,
@@ -776,8 +894,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2 * max(1 - 
-                            edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
+                        ) ** 2 * max(
+                            1 - edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
                         )
                         # was logger.info with f-string
                         logger.debug(
@@ -831,7 +949,6 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         super().new_epoch(epoch)
 
     def after_training(self):
-        print("save path: ", self.config.save)
         if not self.best_arch:
             logger.info(
                 "Best arch not computed during last epoch's test_statistics. Computing now."
@@ -839,6 +956,8 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             self.best_arch = self.get_final_architecture()
 
         logger.info("Final architecture after search:\n" + self.best_arch.modules_str())
+        # The trainer will save the checkpoint, so we don't need to do it here.
+        # print("save path: ", self.config.save)
 
     def get_op_optimizer(self):
         """
@@ -862,11 +981,106 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
+        logger.info(
+            f"Saving checkpoint with {len(self.pruned_op_indices)} pruned architectures."
+        )
         return {
             "model": self.graph,
             "op_optimizer": self.op_optimizer,
-            # "op_optimizer_evaluate": self.op_optimizer_evaluate,
+            "pruned_op_indices": SimpleStateDict(
+                {"pruned_op_indices": self.pruned_op_indices}
+            ),
         }
+
+    def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
+        op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
+        if not op_dir or not getattr(self.config.search, "zcp_method", None):
+            return False
+
+        fname = os.path.join(
+            op_dir,
+            f"op_scores_{self.dataset}_{self.zcp_method}_seed{self.config.search.seed}.json",
+        )
+        if not os.path.exists(fname):
+            logger.info(f"Precomputed op ZCP file not found: {fname}")
+            return False
+
+        with open(fname, "r") as f:
+            payload = json.load(f)
+
+        meta = payload.get("meta", {})
+        scores = payload.get("scores", [])
+        if not isinstance(scores, list) or not scores:
+            logger.warning(f"Precomputed op ZCP file malformed or empty: {fname}")
+            return False
+
+        normalized = bool(meta.get("normalized", False))
+
+        # Traverse edges/primitives exactly as used by weight accumulation
+        ops = graph.get_all_edge_data("op", scope=scope, private_edge_data=True)
+        expected = sum(len(getattr(m, "primitives", [])) for m in ops)
+        if len(scores) != expected:
+            logger.warning(
+                "Precomputed op ZCP shape mismatch. Falling back to on-the-fly computation."
+            )
+            return False
+
+        idx = 0
+        for mixed_op in ops:
+            prims = getattr(mixed_op, "primitives", [])
+            for prim in prims:
+                entry = scores[idx]
+                idx += 1
+
+                leaf_scores = list(entry.get("leaf_scores", []) or [])
+                prim_score = entry.get("primitive_score", None)
+
+                # Assign to j-level leaves first; then to k-level if leftovers exist
+                try:
+                    J = len(prim.op)
+                    # j-level
+                    for j in range(J):
+                        if leaf_scores:
+                            try:
+                                prim.op[j].zero_cost_proxy = float(leaf_scores.pop(0))
+                            except Exception as e:
+                                logger.debug("Failed assigning j-level ZCP: %s", e)
+                    # k-level (if any remain)
+                    if leaf_scores:
+                        for j in range(J):
+                            try:
+                                K = len(prim.op[j].op)
+                                for k in range(K):
+                                    if leaf_scores:
+                                        prim.op[j].op[k].zero_cost_proxy = float(
+                                            leaf_scores.pop(0)
+                                        )
+                            except AttributeError:
+                                continue
+                except AttributeError:
+                    # Simple primitive without children
+                    if leaf_scores:
+                        prim.zero_cost_proxy = float(leaf_scores.pop(0))
+
+                # Set primitive-level score if present
+                if prim_score is not None:
+                    try:
+                        prim.zero_cost_proxy = float(prim_score)
+                    except Exception as e:
+                        logger.debug("Failed assigning primitive-level ZCP: %s", e)
+
+                if leaf_scores:
+                    logger.warning(
+                        "Unconsumed leaf_scores remain for a primitive; JSON and graph structure may differ."
+                    )
+
+        logger.info(
+            "Loaded and applied precomputed per-op ZCPs from %s (normalized=%s)",
+            fname,
+            normalized,
+        )
+        self._zcp_compute_time = 0.0
+        return True
 
 
 class GSparseMixedOp(MixedOp):

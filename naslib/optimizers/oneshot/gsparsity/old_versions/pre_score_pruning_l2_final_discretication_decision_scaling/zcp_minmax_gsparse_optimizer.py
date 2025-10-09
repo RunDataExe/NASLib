@@ -15,13 +15,20 @@ from naslib.search_spaces.core.query_metrics import Metric
 
 from naslib.optimizers.oneshot.gsparsity.ProxSGD_for_groups import ProxSGD
 import naslib.search_spaces.core.primitives as primitives
+from naslib.utils.shape_annotator import ShapeAnnotator
 
+import math
 import numpy as np
+import os, json
+
+from naslib.optimizers.oneshot.gsparsity.operation_zero_cost_proxy_scoring import (
+    evaluate_micro_architecture_zcp,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class GSparseOptimizer(MetaOptimizer):
+class ZCP_GSparseOptimizer(MetaOptimizer):
     """
     Implements Group Sparsity as defined in
         Chatzimichailidis et. al. :
@@ -55,7 +62,7 @@ class GSparseOptimizer(MetaOptimizer):
             loss_criteria: The loss.
             grad_clip (float): Clipping of the gradients. Default None.
         """
-        super(GSparseOptimizer, self).__init__()
+        super(ZCP_GSparseOptimizer, self).__init__()
 
         self.config = config
         self.op_optimizer = op_optimizer
@@ -68,10 +75,212 @@ class GSparseOptimizer(MetaOptimizer):
         self.normalization = config.search.normalization
         self.normalization_exponent = config.search.normalization_exponent
         self.operation_weights = torch.nn.ParameterList()
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )  #! originally torch.device("cuda" if torch.cuda.is_available() else "cpu") #? alternative torch.device("cpu")
+        self.zcp_method = config.search.zcp_method
+        self.train_loader = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.best_arch = None
+
+    def _load_and_apply_precomputed_op_scores(self, graph, scope) -> bool:
+        op_dir = getattr(self.config.search, "pre_computed_op_zc_scores_dir", None)
+        if not op_dir or not getattr(self.config.search, "zcp_method", None):
+            return False
+
+        fname = os.path.join(
+            op_dir,
+            f"op_scores_{self.dataset}_{self.zcp_method}_seed{self.config.search.seed}.json",
+        )
+        if not os.path.exists(fname):
+            logger.info(f"Precomputed op ZCP file not found: {fname}")
+            return False
+
+        with open(fname, "r") as f:
+            payload = json.load(f)
+
+        meta = payload.get("meta", {})
+        scores = payload.get("scores", [])
+        if not isinstance(scores, list) or not scores:
+            logger.warning(f"Precomputed op ZCP file malformed or empty: {fname}")
+            return False
+
+        normalized = bool(meta.get("normalized", False))
+
+        # Traverse edges/primitives exactly as used by weight accumulation
+        ops = graph.get_all_edge_data("op", scope=scope, private_edge_data=True)
+        expected = sum(len(getattr(m, "primitives", [])) for m in ops)
+        if len(scores) != expected:
+            logger.warning(
+                "Precomputed op ZCP shape mismatch. Falling back to on-the-fly computation."
+            )
+            return False
+
+        idx = 0
+        for mixed_op in ops:
+            prims = getattr(mixed_op, "primitives", [])
+            for prim in prims:
+                entry = scores[idx]
+                idx += 1
+
+                leaf_scores = list(entry.get("leaf_scores", []) or [])
+                prim_score = entry.get("primitive_score", None)
+
+                # Assign to j-level leaves first; then to k-level if leftovers exist
+                try:
+                    J = len(prim.op)
+                    # j-level
+                    for j in range(J):
+                        if leaf_scores:
+                            try:
+                                prim.op[j].zero_cost_proxy = float(leaf_scores.pop(0))
+                            except Exception as e:
+                                logger.debug("Failed assigning j-level ZCP: %s", e)
+                    # k-level (if any remain)
+                    if leaf_scores:
+                        for j in range(J):
+                            try:
+                                K = len(prim.op[j].op)
+                                for k in range(K):
+                                    if leaf_scores:
+                                        prim.op[j].op[k].zero_cost_proxy = float(
+                                            leaf_scores.pop(0)
+                                        )
+                            except AttributeError:
+                                continue
+                except AttributeError:
+                    # Simple primitive without children
+                    if leaf_scores:
+                        prim.zero_cost_proxy = float(leaf_scores.pop(0))
+
+                # Set primitive-level score if present
+                if prim_score is not None:
+                    try:
+                        prim.zero_cost_proxy = float(prim_score)
+                    except Exception as e:
+                        logger.debug("Failed assigning primitive-level ZCP: %s", e)
+
+                if leaf_scores:
+                    logger.warning(
+                        "Unconsumed leaf_scores remain for a primitive; JSON and graph structure may differ."
+                    )
+
+        logger.info(
+            "Loaded and applied precomputed per-op ZCPs from %s (normalized=%s)",
+            fname,
+            normalized,
+        )
+        self._zcp_compute_time = 0.0
+        return True
+
+    def _calculate_and_set_zcp_scores(self, graph, scope):
+        """
+        Helper function to calculate ZCP scores for all operations once and store them.
+        This should only be called once.
+        """
+        # NEW: Try to load precomputed op scores first
+        if self._load_and_apply_precomputed_op_scores(graph, scope):
+            logger.info(
+                "Applied precomputed per-operation ZCP scores (already normalized)."
+            )
+            return
+
+        logger.info(f"Calculating all ZCP scores with method '{self.zcp_method}' once.")
+        raw_zero_cost_proxy_scores = []
+
+        # Define a collection function
+        def collect_zero_cost_proxy_scores(edge):
+            if edge.data.has("alpha"):
+                for i in range(len(edge.data.op.primitives)):
+                    # This is a simplified loop, assuming structure from your code
+                    try:
+                        # Case for nested operations (e.g., in a Sequential block)
+                        for j in range(len(edge.data.op.primitives[i].op)):
+                            try:
+                                op = edge.data.op.primitives[i].op[j]
+                                score = evaluate_micro_architecture_zcp(
+                                    operation=op,
+                                    operation_input_full_shape=op.shapes["input_shape"],
+                                    operation_output_full_shape=op.shapes[
+                                        "output_shape"
+                                    ],
+                                    dataloader=self.train_loader,
+                                    zcp_method=self.zcp_method,
+                                    dataset=self.dataset,
+                                )
+                                op.zero_cost_proxy = score
+                                raw_zero_cost_proxy_scores.append(score)
+                            except (AttributeError, TypeError):
+                                continue
+                    except AttributeError:
+                        # Case for simple, non-nested operations
+                        op = edge.data.op.primitives[i]
+                        score = evaluate_micro_architecture_zcp(
+                            operation=op,
+                            operation_input_full_shape=op.shapes["input_shape"],
+                            operation_output_full_shape=op.shapes["output_shape"],
+                            dataloader=self.train_loader,
+                            zcp_method=self.zcp_method,
+                            dataset=self.dataset,
+                        )
+                        op.zero_cost_proxy = score
+                        raw_zero_cost_proxy_scores.append(score)
+
+        graph.update_edges(
+            collect_zero_cost_proxy_scores, scope=scope, private_edge_data=True
+        )
+
+        if not raw_zero_cost_proxy_scores:
+            logger.warning("ZCP scores list is empty. Skipping normalization.")
+            return
+
+        min_zcp, max_zcp = (
+            min(raw_zero_cost_proxy_scores),
+            max(raw_zero_cost_proxy_scores),
+        )
+        logger.info(f"Raw ZCP scores range: [{min_zcp}, {max_zcp}]")
+
+        # Define normalization function based on method
+        if self.zcp_method == "params":
+
+            def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
+                if max_val == min_val:
+                    return 1.0
+                return (np.log(raw_score + 1e-9) - np.log(min_val + 1e-9)) / (
+                    np.log(max_val + 1e-9) - np.log(min_val + 1e-9)
+                )
+        elif self.zcp_method == "synflow":
+
+            def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
+                if max_val == min_val:
+                    return 1.0
+                shift = abs(min_val) + 1e-9
+                return (np.log(raw_score + shift) - np.log(min_val + shift)) / (
+                    np.log(max_val + shift) - np.log(min_val + shift)
+                )
+        else:
+
+            def normalize(raw_score, min_val=min_zcp, max_val=max_zcp):
+                if max_val == min_val:
+                    return 1.0
+                return (raw_score - min_val) / (max_val - min_val)
+
+        # Define a normalization application function
+        def normalize_and_apply_scores(edge):
+            if edge.data.has("zero_cost_proxy"):
+                for i in range(len(edge.data.op.primitives)):
+                    try:
+                        for j in range(len(edge.data.op.primitives[i].op)):
+                            try:
+                                op = edge.data.op.primitives[i].op[j]
+                                op.zero_cost_proxy = normalize(op.zero_cost_proxy)
+                            except (AttributeError, TypeError):
+                                continue
+                    except AttributeError:
+                        op = edge.data.op.primitives[i]
+                        op.zero_cost_proxy = normalize(op.zero_cost_proxy)
+
+        graph.update_edges(
+            normalize_and_apply_scores, scope=scope, private_edge_data=True
+        )
+        logger.info("Completed calculation and normalization of ZCP scores.")
 
     @staticmethod
     def update_ops(edge):
@@ -99,9 +308,13 @@ class GSparseOptimizer(MetaOptimizer):
         dimension = torch.nn.Parameter(
             torch.FloatTensor(len_primitives * [0.0]), requires_grad=False
         )
+        zero_cost_proxy = torch.nn.Parameter(
+            torch.FloatTensor(len_primitives * [0.0]), requires_grad=False
+        )
         edge.data.set("alpha", alpha, shared=True)
         edge.data.set("weights", weights, shared=True)
         edge.data.set("dimension", weights, shared=True)
+        edge.data.set("zero_cost_proxy", zero_cost_proxy, shared=True)
 
     @staticmethod
     def add_weights(edge):
@@ -124,7 +337,9 @@ class GSparseOptimizer(MetaOptimizer):
                 )
                 edge.data.op[i].register_parameter("weight", weight)
 
-    def adapt_search_space(self, search_space, scope=None, dataset_api=None, **kwargs):
+    def adapt_search_space(
+        self, search_space, scope=None, train_loader=None, dataset_api=None, **kwargs
+    ):
         """
         Modify the search space to fit the optimizer's needs,
         e.g. discretize, add alpha flag and shared weight parameter, ...
@@ -134,6 +349,7 @@ class GSparseOptimizer(MetaOptimizer):
                 should be optimized by the optimizer.
         """
         self.search_space = search_space
+        self.train_loader = train_loader
         self.dataset_api = dataset_api
         graph = search_space.clone()
 
@@ -162,6 +378,14 @@ class GSparseOptimizer(MetaOptimizer):
         graph.parse()
         print(graph)
 
+        # 4. Annotate graph with shape information
+        shape_annotator = ShapeAnnotator(self.config)
+        graph = shape_annotator.annotate_graph(graph)
+
+        # --- FIX: Assign self.graph BEFORE using it ---
+        self.graph = graph
+        self.scope = scope
+
         # initializing the ProxSGD optmizer for the operation weights
         self.op_optimizer = self.op_optimizer(
             graph.parameters(),
@@ -172,7 +396,11 @@ class GSparseOptimizer(MetaOptimizer):
             normalization=self.normalization,
             normalization_exponent=self.normalization_exponent,
         )
-        graph.train()
+
+        # # Calculate ZCP scores once after shape annotation
+        # self._calculate_and_set_zcp_scores(self.graph, self.scope)
+
+        self.graph.train()
         self.graph = graph
         self.scope = scope
 
@@ -192,6 +420,11 @@ class GSparseOptimizer(MetaOptimizer):
         """
         input_train, target_train = data_train
         input_val, target_val = data_val
+
+        input_train = input_train.to(self.device)
+        target_train = target_train.to(self.device)
+        input_val = input_val.to(self.device)
+        target_val = target_val.to(self.device)
 
         self.graph.train()
         self.op_optimizer.zero_grad()
@@ -220,6 +453,9 @@ class GSparseOptimizer(MetaOptimizer):
         graph.prepare_discretization()
         normalization_exponent = self.normalization_exponent
 
+        # Recalculate ZCP scores at the beginning of each epoch
+        self._calculate_and_set_zcp_scores(self.graph, self.scope)
+
         def update_l2_weights(edge):
             """
             For operations like SepConv etc that contain suboperations like Conv2d() etc. the square of
@@ -243,8 +479,25 @@ class GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item()
-                                # logger.info(f"Suboperation {j}")
+                                ).item() * max(
+                                    1
+                                    - edge.data.op.primitives[i].op[j].zero_cost_proxy,
+                                    0.000000001,
+                                )
+                                # was logger.info with f-string
+                                logger.debug(
+                                    "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
+                                    max(
+                                        1
+                                        - edge.data.op.primitives[i]
+                                        .op[j]
+                                        .zero_cost_proxy,
+                                        1e-9,
+                                    ),
+                                    i,
+                                    j,
+                                    weight,
+                                )
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -265,8 +518,30 @@ class GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item()
-                                        # logger.info(f"Subsuboperation {k}")
+                                        ).item() * max(
+                                            1
+                                            - edge.data.op.primitives[i]
+                                            .op[j]
+                                            .op[k]
+                                            .zero_cost_proxy,
+                                            0.000000001,
+                                        )
+                                        # was logger.info with f-string
+                                        logger.debug(
+                                            "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
+                                            max(
+                                                1
+                                                - edge.data.op.primitives[i]
+                                                .op[j]
+                                                .op[k]
+                                                .zero_cost_proxy,
+                                                1e-9,
+                                            ),
+                                            i,
+                                            j,
+                                            k,
+                                            weight,
+                                        )
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -279,9 +554,17 @@ class GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2
+                        ) ** 2 * max(
+                            1 - edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
+                        )
+                        # was logger.info with f-string
+                        logger.debug(
+                            "Applying normalized ZCP: %s to Primitive %d weight: %s",
+                            max(1 - edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
+                            i,
+                            edge.data.weights[i],
+                        )
                         edge.data.dimension[i] += size
-                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -399,6 +682,9 @@ class GSparseOptimizer(MetaOptimizer):
         """
         Just log the l2 norms of operation weights.
         """
+        # Recalculate ZCP scores at the beginning of each epoch
+        self._calculate_and_set_zcp_scores(self.graph, self.scope)
+
         normalization_exponent = self.normalization_exponent
 
         def update_l2_weights(edge):
@@ -424,8 +710,25 @@ class GSparseOptimizer(MetaOptimizer):
                                         edge.data.op.primitives[i].op[j].weight, 2
                                     )
                                     ** 2
-                                ).item()
-                                # logger.info(f"Suboperation {j}")
+                                ).item() * max(
+                                    1
+                                    - edge.data.op.primitives[i].op[j].zero_cost_proxy,
+                                    0.000000001,
+                                )
+                                # was logger.info with f-string
+                                logger.debug(
+                                    "Applying normalized ZCP: %s to Primitive %d operation %d weight: %s",
+                                    max(
+                                        1
+                                        - edge.data.op.primitives[i]
+                                        .op[j]
+                                        .zero_cost_proxy,
+                                        1e-9,
+                                    ),
+                                    i,
+                                    j,
+                                    weight,
+                                )
                             except (AttributeError, TypeError) as e:
                                 try:
                                     for k in range(
@@ -446,8 +749,30 @@ class GSparseOptimizer(MetaOptimizer):
                                                 2,
                                             )
                                             ** 2
-                                        ).item()
-                                        # logger.info(f"Subsuboperation {k}")
+                                        ).item() * max(
+                                            1
+                                            - edge.data.op.primitives[i]
+                                            .op[j]
+                                            .op[k]
+                                            .zero_cost_proxy,
+                                            0.000000001,
+                                        )
+                                        # was logger.info with f-string
+                                        logger.debug(
+                                            "Applying normalized ZCP: %s to Primitive %d operation %d operation %d weight: %s",
+                                            max(
+                                                1
+                                                - edge.data.op.primitives[i]
+                                                .op[j]
+                                                .op[k]
+                                                .zero_cost_proxy,
+                                                1e-9,
+                                            ),
+                                            i,
+                                            j,
+                                            k,
+                                            weight,
+                                        )
                                 except AttributeError:
                                     continue
                         edge.data.weights[i] += weight
@@ -460,9 +785,17 @@ class GSparseOptimizer(MetaOptimizer):
                         )
                         edge.data.weights[i] += (
                             edge.data.op.primitives[i].weight.item()
-                        ) ** 2
+                        ) ** 2 * max(
+                            1 - edge.data.op.primitives[i].zero_cost_proxy, 0.000000001
+                        )
+                        # was logger.info with f-string
+                        logger.debug(
+                            "Applying normalized ZCP: %s to Primitive %d weight: %s",
+                            max(1 - edge.data.op.primitives[i].zero_cost_proxy, 1e-9),
+                            i,
+                            edge.data.weights[i],
+                        )
                         edge.data.dimension[i] += size
-                        # logger.info(f"Primitive {i}")
 
         def normalize_weights(edge):
             if edge.data.has("alpha"):
@@ -503,6 +836,7 @@ class GSparseOptimizer(MetaOptimizer):
             reinitialize_l2_weights, scope=self.scope, private_edge_data=False
         )
         self.operation_weights = torch.nn.ParameterList()
+        self.graph.to(self.device)
         super().new_epoch(epoch)
 
     def after_training(self):
@@ -533,16 +867,14 @@ class GSparseOptimizer(MetaOptimizer):
         Return all objects that should be saved in a checkpoint during training.
 
         Will be called after `before_training` and must include key "model".
-        `op_optimizer_evaluate` is a class reference for evaluation, not a stateful
-        object during search, so it's not included here.
 
         Returns:
             (dict): with name as key and object as value. e.g. graph, arch weights, optimizers, ...
         """
         return {
             "model": self.graph,
-            "op_optimizer": self.op_optimizer,  # This is an instance
-            # "op_optimizer_evaluate": self.op_optimizer_evaluate, # This is a CLASS, so don't save its state_dict
+            "op_optimizer": self.op_optimizer,
+            # "op_optimizer_evaluate": self.op_optimizer_evaluate,
         }
 
 

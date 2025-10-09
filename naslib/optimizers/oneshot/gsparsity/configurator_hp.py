@@ -13,43 +13,56 @@ import torch
 import numpy as np
 
 from naslib.optimizers import (
-    RandomSearch,
     LocalSearch,
     Bananas,
-    GSparseOptimizer,
     DrNASOptimizer,
-    ZCP_GSparseOptimizer,
-    Inverted_Bananas,
-    Inverted_Bananas_GsparseOptimizer,
-    Inverted_Bananas_ZCP_GsparseOptimizer,
 )
-from naslib.optimizers.oneshot.gsparsity.darts_optimizer import (
+
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.random_search_optimizer import (
+    RandomSearch,
+)
+
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.darts_optimizer import (
     DARTSOptimizer,
 )
 
-#!!!!!!!
-from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.gs_nas import (
+    ZCP_GSparseOptimizer as GSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_pre_pruning_gs_nas import (
+    ZCP_GSparseOptimizer as PreZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_pre_pruning_zcp_scaling_gs_nas import (
+    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
+)
+from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_scaling_gs_nas import (
     ZCP_GSparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_Gsparse import (
-    GSparseOptimizer as PreZCPGSparseOptimizer,
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
+    Inverted_Bananas,
 )
-from naslib.optimizers.oneshot.gsparsity.zc_pre_reducing_search_space_zcp_minmax_gsparse_optimizer import (
-    ZCP_GSparseOptimizer as PreZCPZCPGSparseOptimizer,
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
+    Inverted_Bananas_GsparseOptimizer,
 )
 
-# Add imports for self-training optimizers
-from naslib.optimizers.oneshot.gsparsity.self_training_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
+    Inverted_Bananas_ZCP_GsparseOptimizer,
+)
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
     Bananas as SelfTrainingBananas,
 )
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_optimizer import (
-    Inverted_Bananas as SelfTrainingInvertedBananas,
-)
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_gsparse_optimizer import (
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
 )
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
+    Inverted_Bananas as SelfTrainingInvertedBananas,
+)
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
 )
 
@@ -150,59 +163,6 @@ resume = args.resume
 np.random.seed(seed)
 torch.manual_seed(seed)
 
-# Standard Query-based: comp_factor * scaling_epochs 200
-# Query-based Self-Training: scaling_epochs / 200 * comp_factor
-# Real-time Self-Training: comp_factor = 1; scaling_epochs = 1.0
-
-
-# Maybe the problem is also related to the change of the logger in the configurator. As the statedict in the log says it is not complete thus the checkpoint after completing one epoch with gsparsity should also contain less. Or is this the case and my logging / printing information is just not nuanced enough to capture this?
-
-# have look at log.log file
-
-
-#! use computational factor for every time that is querried (multi shot and two stage)
-
-#! maybe use one epoch (bias towards early influencial hp) / or much less data and more epochs for hpo than check hpo importance and with that reduce search space to imporatant params use the paper that says one epoch is unreasonably good and optuna
-
-#! use logarithmic for left bounded [0,infinit]; [log a, log b] bischlHyperparameterOptimizationFoundations2021
-#! should I use holdout/cross validation?
-
-#! Multiply time that it takes for random search by a factor that captures the prunning rate that was used in the zcp-gs-nas and gs-nas methods, how to make it such that only the search of the second phase is pruned? Should I not take 3 zcp´s per condition but have it as HP that is automatically tuned as well? Thus able to have more compute to tune one methodoligy and probably better results.
-
-#! Use the same random seeds for compared conditions, such that results are more comparable as they start more simililar e.g. param initialization, which images are sampled etc.
-
-#! if I change search space to carry information of shapes than this is only the case for non querry optimizers and thus the comparability might suffer a bit. Also mention that I only do this to use the ZCP that are already implemented in NASLib. Else it would probably faster
-
-#! check for cifar10, 100 and ImageNet16-120
-
-#! Please save my search trajectory, best model, best val acc and so on. Trainer.py should have options for this. Look at both uploaded files and decide, what the best approach would be. It should be able to resume from a checkpoint. Be aware of the interaction of HPO via Optuna and the training of the models them self.
-
-
-#! TODO RAW DATA SPEICHERN, Irgend ein logging tool
-
-#! for any bo + any gs nas -> estimated bo time + actual oneshot time
-
-# ! TPESampler() and HyperbandPruner(), maximize accuracy. For blackbox use querries for prunning; for oneshot use epochs for prunning, for commbined use querry + epoch estimated times; is it possible to start with default hpo setting and go from there?
-
-#! Verify this shortly
-# ! get automated script generation and running from history
-# ! modified version of this for gsparsity and modified version of gsparsity
-
-# TODO check if zcp bananas and inverted bananas are giving correct results and are truely using the zcps
-# TODO check if zcp gsparsity is giving correct results
-# TODO check if code for each method runs on nasbench201 cifar10, cifar100, ImageNet16-120 and on nasbench301 cifar10
-# TODO does zcp_gsparsity use cuda?
-# TODO how to treat cutout for gsparsity? Does it influence on NASbench301? Also how to treat with respect to hpo? If it does not influence but hpo is wasting time on it would be tragic
-# TODO Checkpointing and resuming
-# TODO implement the hyperparameters for all (further down is a list)
-# TODO HPO using optuna -> setting budget (time limit); optuna.logging and optuna.importance (https://medium.com/@mdshah930/understranding-hyperparameter-importance-in-optuna-mastering-optuna-part-2-c5c88956152a)
-# TODO make optuna resumable (syncing NASLib and Optuna)
-# TODO make optuna also reproducible
-# TODO improve transparend, unbiased seed generation
-# TODO add argparse to the script such that it can ealily be automatically run from automatically generated bash scripts using slurm (verification if already runs, or finished)
-# TODO add the new implemented methods
-# TODO how to handle zcp
-
 # Common evaluation configuration for all optimizers
 evaluation = {
     "checkpoint_freq": 30,
@@ -224,7 +184,7 @@ evaluation = {
 }
 
 optimizer_configs = {
-    "rs": {  #! has to be allowed to run longer to compensate for the hpo e.g. give runtime or maybe use time per epoch to calculate how many more epochs per dataset it should be allowed to run and check back if it went over the budget if it did remove till in budget
+    "rs": {
         "search": {
             "checkpoint_freq": 5,  #!
             "epochs": search_epochs,

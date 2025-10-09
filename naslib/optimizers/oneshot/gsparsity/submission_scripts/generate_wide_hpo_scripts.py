@@ -58,7 +58,7 @@ def generate_slurm_script(optimizer, dataset, seed, zcp_method):
         f"--dataset {dataset}",
         f"--seed {seed}",
         "--resume True",
-        "--out_dir naslib/optimizers/oneshot/gsparsity/results",
+        "--out_dir naslib/optimizers/oneshot/gsparsity/results_wide_hpo",
     ]
     if zcp_method:
         base_cmd.insert(2, f"--zcp_method {zcp_method}")

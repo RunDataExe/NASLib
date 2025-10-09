@@ -1,5 +1,7 @@
 *.DS_Store
 
+*naslib/optimizers/oneshot/gsparsity/results
+
 # Log files
 *.out
 *.err

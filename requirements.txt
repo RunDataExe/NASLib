@@ -1,8 +1,8 @@
 ConfigSpace>=0.4.17
 pyyaml==6.0
 networkx==2.6.3
-numpy==1.21.5; python_version <= '3.7'
-numpy>=1.22.0; python_version > '3.7'
+numpy==1.21.5
+# numpy
 torch>=1.9.0
 torchvision>=0.10.0
 fvcore==0.1.5.post20210630
@@ -13,8 +13,10 @@ xgboost==1.4.2
 emcee==3.1.0
 pybnn==0.0.5
 grakel==0.1.8
+# grakel
 pyro-ppl==1.6.0
-scipy==1.4.1
+# scipy==1.4.1
+scipy>=1.7.0
 
 # additional from setup.py prev
 tqdm>=4.64.0

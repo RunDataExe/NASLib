@@ -751,7 +751,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
 
     # Set up the logger
     logger = setup_logger(config.save + "/log.log")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Configure the 'fvcore' logger to use the same file handler
     # as the main application logger.
@@ -766,7 +766,7 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
         # Add the application's file handler to the fvcore logger
         fvcore_logger.addHandler(app_file_handler)
         # Set the level for the fvcore logger. INFO will capture INFO and WARNING messages.
-        fvcore_logger.setLevel(logging.DEBUG)
+        fvcore_logger.setLevel(logging.INFO)
         # Prevent fvcore messages from being propagated to ancestor loggers,
         # as they are now explicitly handled by the app_file_handler.
         # This helps avoid duplicate messages if the root logger also has handlers (e.g., console).

@@ -87,7 +87,6 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.normalization = config.search.normalization
         self.normalization_exponent = config.search.normalization_exponent
         self.operation_weights = torch.nn.ParameterList()
-        self.zcp_method = config.search.zcp_method
         self.train_loader = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.pruned_op_indices = []  # List of op_indices to prune

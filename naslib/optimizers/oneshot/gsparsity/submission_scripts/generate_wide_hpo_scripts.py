@@ -8,7 +8,8 @@ def _script_header(optimizer, dataset, seed, zcp_method=None):
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --partition=gpu_a100_il
+#SBATCH --partition=accelerated
+#SBATCH --account=hk-project-pai00070
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=32
@@ -77,7 +78,8 @@ def main():
         # "inverted_bananas_gsparsity",
         # "inverted_bananas_zcp_gsparsity",
     ]
-    datasets = ["cifar100", "ImageNet16-120"]
+    datasets = ["ImageNet16-120"]
+    # datasets = ["cifar100", "ImageNet16-120"]
     zcp_method = ["jacov", "params", "synflow"]
     seed = 2152435495
 

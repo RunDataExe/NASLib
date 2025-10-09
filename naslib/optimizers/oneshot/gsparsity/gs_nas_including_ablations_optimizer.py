@@ -98,6 +98,12 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
             "enable_pre_zc_pruning",
             True,
         )
+        # NEW: toggle to disable zero-cost proxy scoring & scaling (defaults to True for backward compat)
+        self.enable_zcp_scaling = getattr(
+            getattr(config, "search", object()),
+            "enable_zcp_scaling",
+            True,
+        )
 
     @staticmethod
     def check_pruning_invariants(optimizer, graph, scope):
@@ -548,72 +554,59 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         graph,
         scope,
         base_mu,
+        enable_zcp_scaling=True,
     ):
         """
         Create optimizer param_groups with group-specific weight_decay scaled by ZCP.
+        If enable_zcp_scaling is False, grouping remains identical but weight_decay is uniform (= base_mu).
         """
-        # 1) Collect per-group: params and primitive ZCPs
-        groups = {}  # key -> dict(params=[...], zcp_vals=[...])
+        groups = {}
         for edge, i, prim in self._iter_edge_primitives(graph, scope):
-            key = self._group_key(edge, i)  # <- remove extra arg
+            key = self._group_key(edge, i)
             if key not in groups:
                 groups[key] = {"params": [], "zcp_vals": []}
             p = self._primitive_params(prim)
-            z = self._avg_primitive_zcp(prim, default=0)
+            if enable_zcp_scaling:
+                z = self._avg_primitive_zcp(prim, default=0)
+                groups[key]["zcp_vals"].append(z)
             groups[key]["params"].extend(p)
-            groups[key]["zcp_vals"].append(z)
-            logger.info(
-                "Group %s: +%d params, +ZCP=%.6f (running: params=%d, zcp_vals=%d)",
-                key,
-                len(p),
-                z,
-                len(groups[key]["params"]),
-                len(groups[key]["zcp_vals"]),
-            )
 
-        # Summary of initial grouping
         total_groups = len(groups)
         total_params = sum(len(v["params"]) for v in groups.values())
         total_zcp_vals = sum(len(v["zcp_vals"]) for v in groups.values())
-        avg_params_per_group = total_params / total_groups if total_groups else 0.0
-        avg_zcp_per_group = total_zcp_vals / total_groups if total_groups else 0.0
         logger.info(
-            "[init groups] groups=%d, total_params=%d, total_zcp_vals=%d, "
-            "avg_params/group=%.2f, avg_zcp/group=%.2f",
+            "[init groups] groups=%d, total_params=%d, total_zcp_vals=%d (scaling=%s)",
             total_groups,
             total_params,
             total_zcp_vals,
-            avg_params_per_group,
-            avg_zcp_per_group,
+            str(enable_zcp_scaling),
         )
 
-        # 2) Aggregate to a single ZCP per group
         group_scores = {}
-        for k, v in groups.items():
-            zcps = v["zcp_vals"]
-            group_scores[k] = float(np.median(zcps)) if zcps else 0.0
+        if enable_zcp_scaling:
+            for k, v in groups.items():
+                zcps = v["zcp_vals"]
+                group_scores[k] = float(np.median(zcps)) if zcps else 0.0
+                logger.info(
+                    "Group %s: median aggregated ZCP=%.6f from %d values.",
+                    k,
+                    group_scores[k],
+                    len(zcps),
+                )
+            scales = {k: max(1.0 - s, 1e-9) for k, s in group_scores.items()}
+        else:
+            # uniform scaling
+            scales = {k: 1.0 for k in groups.keys()}
+            group_scores = {k: None for k in groups.keys()}
             logger.info(
-                "Group %s: median aggregated ZCP=%.6f from %d values.",
-                k,
-                group_scores[k],
-                len(zcps),
+                "ZCP scaling disabled: using uniform weight_decay=base_mu for all groups."
             )
 
-        # 3) Map to penalty scale (already normalized ZCP: low ZCP -> higher penalty)
-        scales = {k: max(1.0 - s, 1e-9) for k, s in group_scores.items()}
-        for k, s in scales.items():
-            logger.info(
-                "Group %s: reversed and floored median zcp -> penalty scale=%.6f.", k, s
-            )
-
-        # 4) Build param_groups with per-group weight_decay
         param_groups = []
         for k, v in groups.items():
             if not v["params"]:
                 continue
             wd = float(base_mu) * float(scales[k])
-            n_params = len(v["params"])
-            n_zcp = len(groups[k]["zcp_vals"])
             pg = {
                 "params": v["params"],
                 "weight_decay": wd,
@@ -624,23 +617,24 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
                 "clip_bounds": (0, 1),
                 "normalization": self.normalization,
                 "normalization_exponent": self.normalization_exponent,
-                # store counts for later reference/logging
-                "n_params": n_params,
-                "n_zcp": n_zcp,
+                "n_params": len(v["params"]),
+                "n_zcp": len(v["zcp_vals"]),
             }
-            param_groups.append(pg)
             logger.info(
-                "Param group %s: n_params=%d, n_zcp=%d, median_zcp=%.6f, "
-                "scale=%.6f, weight_decay=%.6f",
+                "Param group %s: n_params=%d, median_zcp=%s, scale=%.6f, weight_decay=%.6f",
                 k,
-                n_params,
-                n_zcp,
-                group_scores[k],
+                len(v["params"]),
+                "NA" if group_scores[k] is None else f"{group_scores[k]:.6f}",
                 scales[k],
                 wd,
             )
+            param_groups.append(pg)
 
-        logger.info("Finalized %d param groups for optimizer.", len(param_groups))
+        logger.info(
+            "Finalized %d param groups (scaling=%s).",
+            len(param_groups),
+            str(enable_zcp_scaling),
+        )
         return param_groups
 
     def _refresh_group_weight_decay_from_zcp(
@@ -652,7 +646,17 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
     ):
         """
         Recompute per-group ZCP scales and update optimizer.param_groups in-place.
+        If scaling disabled, simply reset all group weight_decay to base_mu.
         """
+        if not self.enable_zcp_scaling:
+            for pg in optimizer.param_groups:
+                pg["weight_decay"] = float(base_mu)
+                pg["zcp_scale"] = 1.0
+            logger.info(
+                "ZCP scaling disabled: refreshed all groups to uniform weight_decay=%.6f.",
+                float(base_mu),
+            )
+            return
         logger.info(
             "Refreshing group weight_decay from ZCP (base_mu=%.6f).", float(base_mu)
         )
@@ -914,9 +918,15 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         self.scope = scope
 
         # Compute ZCP, build param-groups and optimizer
-        self._calculate_and_set_zcp_scores(self.graph, self.scope)
+        if self.enable_zcp_scaling:
+            self._calculate_and_set_zcp_scores(self.graph, self.scope)
+        else:
+            logger.info("ZCP scoring & scaling disabled: skipping score computation.")
         param_groups = self._build_param_groups_with_zcp(
-            self.graph, self.scope, base_mu=self.mu
+            self.graph,
+            self.scope,
+            base_mu=self.mu,
+            enable_zcp_scaling=self.enable_zcp_scaling,
         )
 
         if len(param_groups) == 0:
@@ -1177,8 +1187,7 @@ class ZCP_GSparseOptimizer(MetaOptimizer):
         """
         Just log the l2 norms of operation weights.
         """
-        # Recalculate ZCP scores at the beginning of each epoch
-        if epoch > 0:
+        if epoch > 0 and self.enable_zcp_scaling:
             self._refresh_group_weight_decay_from_zcp(
                 optimizer=self.op_optimizer,
                 graph=self.graph,
@@ -1368,7 +1377,7 @@ class GSparseMixedOp(MixedOp):
                 out = op.weight * out
             summed = out if summed is None else (summed + out)
             n_active += 1
-            # Optional: stabilize scale by averaging (uncomment if desired)
+            # Optional: stabilize scale by averaging
             # if n_active > 0:
             #     summed = summed / n_active
         return summed

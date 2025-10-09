@@ -12,7 +12,7 @@ from naslib.optimizers.core.metaclasses import MetaOptimizer
 from naslib.optimizers.oneshot.gsparsity.old_versions.pre_score_pruning_l2_final_discretication_decision_scaling.gsparsity_optimizer import (
     GSparseOptimizer,
 )
-from naslib.optimizers.oneshot.gsparsity.self_training_inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
 from naslib.utils.remove_arch_from_search_space import (

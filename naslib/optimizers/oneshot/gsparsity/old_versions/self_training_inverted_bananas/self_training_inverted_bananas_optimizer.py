@@ -2,7 +2,9 @@ import logging
 import numpy as np
 import torch
 
-from naslib.optimizers.oneshot.gsparsity.self_training_bananas_optimizer import Bananas
+from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
+    Bananas,
+)
 
 logger = logging.getLogger(__name__)
 

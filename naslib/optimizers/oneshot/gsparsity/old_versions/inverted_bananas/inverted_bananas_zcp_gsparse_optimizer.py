@@ -13,10 +13,12 @@ from naslib.optimizers.core.metaclasses import MetaOptimizer
 # from naslib.optimizers.oneshot.gsparsity.zcp_gsparse_optimizer import (
 #     ZCP_GSparseOptimizer,
 # )
-from naslib.optimizers.oneshot.gsparsity.zcp_minmax_gsparse_optimizer import (
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.pre_score_pruning_l2_final_discretication_decision_scaling.zcp_minmax_gsparse_optimizer import (
     ZCP_GSparseOptimizer,
 )
-from naslib.optimizers.oneshot.gsparsity.inverted_bananas_optimizer import (
+
+from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
 from naslib.utils.remove_arch_from_search_space import (

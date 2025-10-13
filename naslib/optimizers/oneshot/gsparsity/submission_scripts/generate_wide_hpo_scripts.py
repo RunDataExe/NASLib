@@ -20,6 +20,43 @@ def _script_header(optimizer, dataset, seed, zcp_method=None):
 # Fail fast on errors; keep pipelines strict
 set -eo pipefail
 
+module --quiet --force purge
+module load compiler/intel/2025.1_llvm
+module load numlib/mkl/2025.1
+module load devel/cuda/12.4
+
+# Locate conda base robustly
+if [[ -z "${{CONDA_BASE:-}}" ]]; then
+  for cand in \
+    "/hkfs/work/workspace/scratch/ma_ruweber-gs_nas_extension/miniconda3" \
+    "$HOME/miniconda3" \
+    "$HOME/.miniconda3" \
+    "/hkfs/home/$USER/miniconda3"
+  do
+    if [[ -f "$cand/etc/profile.d/conda.sh" ]]; then
+      CONDA_BASE="$cand"
+      break
+    fi
+  done
+fi
+
+if [[ -z "${{CONDA_BASE:-}}" ]] || [[ ! -f "$CONDA_BASE/etc/profile.d/conda.sh" ]]; then
+  echo "[Error] Could not find conda.sh. Set CONDA_BASE to your Miniconda path or adjust candidates." >&2
+  exit 1
+fi
+
+# Initialize and activate env
+source "$CONDA_BASE/etc/profile.d/conda.sh"
+conda activate 38_gs_nas
+
+# Help dynamic linker find SVML/MKL
+if [[ -n "${{ONEAPI_ROOT:-}}" ]]; then
+  export LD_LIBRARY_PATH="$ONEAPI_ROOT/compiler/latest/linux/compiler/lib/intel64_lin:$LD_LIBRARY_PATH"
+fi
+if [[ -n "${{MKLROOT:-}}" ]]; then
+  export LD_LIBRARY_PATH="$MKLROOT/lib/intel64:$LD_LIBRARY_PATH"
+fi
+
 # Safe defaults: minimize thread contention across libs and processes
 CPUS=${{SLURM_CPUS_PER_TASK:-32}}
 THREADS=${{THREADS:-1}}  # override per job if needed

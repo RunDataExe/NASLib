@@ -279,7 +279,8 @@ def build_latex_table(best_rows: List[Dict[str, object]]) -> str:
             if key.startswith("param.")
         }
     )
-    col_spec = "lllrrr" + "l" * len(param_names)
+    # Add an extra numeric column for the trials count
+    col_spec = "lllrrrr" + "l" * len(param_names)
     header_cols = [
         r"\textbf{Method}",
         r"\textbf{Dataset}",
@@ -287,6 +288,7 @@ def build_latex_table(best_rows: List[Dict[str, object]]) -> str:
         r"\textbf{Trial \#}",
         r"\textbf{Trial Value}",
         r"\textbf{Trial Budget}",
+        r"\textbf{Trials}",
         *[f"\\textbf{{{latex_escape(name)}}}" for name in param_names],
     ]
     lines = [
@@ -319,6 +321,10 @@ def build_latex_table(best_rows: List[Dict[str, object]]) -> str:
         trial_budget = latex_escape(
             latexify_pm(format_numeric(row.get("trial_budget")))
         )
+        # Prefer eligible trials, fall back to total if missing
+        trials_count = row.get("n_trials_eligible", row.get("n_trials_total"))
+        trials_count = latex_escape(format_numeric(trials_count))
+
         param_values = []
         for name in param_names:
             key = f"param.{name}"
@@ -336,6 +342,7 @@ def build_latex_table(best_rows: List[Dict[str, object]]) -> str:
                 trial_no,
                 trial_value,
                 trial_budget,
+                trials_count,
                 *param_values,
             ]
         )
@@ -402,6 +409,9 @@ def main() -> None:
                 "trial_score": _trial_score_highest_val_acc(best_trial),
                 "trial_budget": _trial_budget(best_trial),
                 "trial_last_step": best_trial.last_step,
+                # New: counts for reporting
+                "n_trials_total": len(study.get_trials(deepcopy=False)),
+                "n_trials_eligible": len(eligible_trials),
             }
 
             row = dict(base_info)

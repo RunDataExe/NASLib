@@ -856,30 +856,18 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     dataset_api = get_dataset_api(search_space_type, dataset)
 
     # Instantiate the optimizer
-    if optimizer_type == "rs" or optimizer_type == "random_sampling":
+    if optimizer_type in ["rs", "random_sampling"]:
         optimizer = RandomSearch(config)
-    elif optimizer_type == "ls":
-        optimizer = LocalSearch(config)
-    elif optimizer_type == "bananas":
-        optimizer = Bananas(config)
-    elif optimizer_type == "drnas":
-        optimizer = DrNASOptimizer()
     elif optimizer_type == "darts":
         optimizer = DARTSOptimizer(config)
     elif optimizer_type == "gsparsity":
         optimizer = GSparseOptimizer(config)
     elif optimizer_type == "zcp_gsparsity":
         optimizer = ZCP_GSparseOptimizer(config)
-    elif optimizer_type == "inverted_bananas":
-        optimizer = Inverted_Bananas(config)
     elif optimizer_type == "inverted_bananas_gsparsity":
         optimizer = Inverted_Bananas_GsparseOptimizer(config)
     elif optimizer_type == "inverted_bananas_zcp_gsparsity":
         optimizer = Inverted_Bananas_ZCP_GsparseOptimizer(config)
-    elif optimizer_type == "self_training_bananas":
-        optimizer = SelfTrainingBananas(config)
-    elif optimizer_type == "self_training_inverted_bananas":
-        optimizer = SelfTrainingInvertedBananas(config)
     elif optimizer_type == "self_training_inverted_bananas_gsparsity":
         optimizer = SelfTrainingInvertedBananasGsparse(config)
     elif optimizer_type == "self_training_inverted_bananas_zcp_gsparsity":

@@ -80,6 +80,51 @@ FMTS = [*["-"] * C_MAX, *["--"] * C_MAX, *[":"] * C_MAX]
 # Circle, Square, Plus, Diamond, and Cross are highly discriminable.
 MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
 
+def plot_scatter_markers(
+    ax,
+    x,
+    y,
+    color,
+    marker,
+    seed,
+    max_time,
+    jitter_frac=1e-3,
+    size=30,
+    alpha=0.85,
+    edgecolor="white",
+    linewidth=0.45,
+    rasterize=True,
+):
+    """
+    Compact markers for dense stability plots:
+      - deterministic jitter (per-seed) to break exact overlap
+      - thin contrasting edge (edgecolor) so small markers remain visible
+      - rasterized scatter for dense regions to keep vector output small
+    jitter_frac: fraction of max_time used as jitter amplitude
+    """
+    if len(x) == 0:
+        return
+    try:
+        seed_int = int(seed) if isinstance(seed, (int, str)) and str(seed).isdigit() else hash(seed) & 0xFFFFFFFF
+    except Exception:
+        seed_int = 0
+    prng = np.random.RandomState(seed_int)
+    jitter_amount = jitter_frac * (max_time if max_time > 0 else 1.0)
+    jitter = (prng.rand(len(x)) - 0.5) * jitter_amount
+    x_j = np.array(x) + jitter
+
+    ax.scatter(
+        x_j,
+        y,
+        s=size,
+        c=[color],
+        marker=marker,
+        edgecolors=edgecolor,
+        linewidths=linewidth,
+        alpha=alpha,
+        rasterized=rasterize,
+        zorder=6,
+    )
 
 def get_color_shades(base_color, n_shades):
     """Generates a list of color shades from a base color."""
@@ -336,16 +381,20 @@ def plot_anytime_stability(
                     )  # Make '+' thicker
 
                     # Plot the raw data points as markers
-                    ax.plot(
+                    plot_scatter_markers(
+                        ax,
                         time[1:],  # Exclude the t=0 random guess point
                         acc[1:],
-                        linestyle="None",  # No line connecting markers
-                        marker=marker,
                         color=seed_colors[i],
-                        markersize=current_markersize,
-                        markeredgewidth=current_markeredgewidth,
-                        alpha=0.9,
-                        label=None,  # Legend handled manually later
+                        marker=marker,
+                        seed=run_meta.get("seed", i),
+                        max_time=max_time,
+                        jitter_frac=1e-4,
+                        size=24,
+                        alpha=0.85,
+                        edgecolor="white",
+                        linewidth=0.4,
+                        rasterize=True,
                     )
             else:
                 # For combined plot, use method-specific colors for seeds, but a single legend entry
@@ -358,16 +407,20 @@ def plot_anytime_stability(
                     current_markeredgewidth = 2 if marker == "+" else 1
 
                     # Plot the raw data points as markers
-                    ax.plot(
+                    plot_scatter_markers(
+                        ax,
                         time[1:],  # Exclude the t=0 random guess point
                         acc[1:],
-                        linestyle="None",
+                        color=seed_colors[i],
                         marker=marker,
-                        color=seed_colors[i],  # Use the derived shade for each seed
-                        markersize=current_markersize,
-                        markeredgewidth=current_markeredgewidth,
-                        alpha=0.7,
-                        label=None,  # Labeling is handled manually later
+                        seed=run_meta.get("seed", i),
+                        max_time=max_time,
+                        jitter_frac=1e-4,
+                        size=20,
+                        alpha=0.75,
+                        edgecolor="white",
+                        linewidth=0.35,
+                        rasterize=True,
                     )
 
             # --- Aggregation and Mean Plot ---
@@ -562,16 +615,20 @@ def plot_anytime_stability(
                  marker = seed_to_marker.get(run_meta["seed"], "x")
                  current_markersize = 8 if marker == "+" else 5
                  current_markeredgewidth = 2 if marker == "+" else 1
-                 ax.plot(
+                 plot_scatter_markers(
+                     ax,
                      time[1:],
                      acc[1:],
-                     linestyle="None",
-                     marker=marker,
                      color=seed_colors[i],
-                     markersize=current_markersize,
-                     markeredgewidth=current_markeredgewidth,
-                     alpha=0.7,
-                     label=None,
+                     marker=marker,
+                     seed=run_meta.get("seed", i),
+                     max_time=max_time,
+                     jitter_frac=1e-4,
+                     size=20,
+                     alpha=0.75,
+                     edgecolor="white",
+                     linewidth=0.35,
+                     rasterize=True,
                  )
 
              # Interpolate to compute min/max band

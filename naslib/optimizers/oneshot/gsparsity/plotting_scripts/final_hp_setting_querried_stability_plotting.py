@@ -528,11 +528,11 @@ def plot_anytime_stability(
                 ax.legend(
                     handles=handles + seed_handles,
                     labels=[instability_label] + seed_labels,
-                    loc="upper left",
+                    loc="lower right",
                     ncol=1,
                 )
 
-                ax.set_xlabel("Runtime (s) [Log Scale]")
+                ax.set_xlabel("Runtime (s) [Linear Scale]")
                 if acc_metric == "valid_acc":
                     ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
                     ax.set_title(
@@ -543,8 +543,10 @@ def plot_anytime_stability(
                     ax.set_title(
                         f"Anytime Raw Training Stability | {dataset.upper()} | NAS-Bench-201"
                     )
-                ax.set_xscale("log")
-                ax.set_xlim(left=1)  # Start x-axis at 1 (10^0)
+                # Match performance plotting: use linear x-axis for individual (non-combined) plots,
+                # and start at 0 seconds so the random-guess point at t=0 is visible.
+                ax.set_xscale("linear")
+                ax.set_xlim(left=0)
                 ax.set_ylim(bottom=0)  # Start y-axis at 0
                 ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
                 ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -718,11 +720,11 @@ def plot_anytime_stability(
         ax.legend(
             handles=method_handles + seed_handles,
             labels=method_labels + seed_labels,
-            loc="upper left",
+            loc="lower right",
             ncol=1,
         )
 
-        ax.set_xlabel("Runtime (s) [Log Scale]")
+        ax.set_xlabel("Runtime (s) [Linear Scale]")
         if acc_metric == "valid_acc":
             ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
             plot_title = (
@@ -734,7 +736,9 @@ def plot_anytime_stability(
                 f"Anytime Raw Training Stability | {dataset.upper()} | NAS-Bench-201"
             )
         ax.set_title(plot_title)
-        ax.set_xscale("log")
+        # Match performance plotting: use linear x-axis for combined plots and keep
+        # left=1 for combined to be consistent with performance combined behavior.
+        ax.set_xscale("linear")
         ax.set_xlim(left=1)
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))

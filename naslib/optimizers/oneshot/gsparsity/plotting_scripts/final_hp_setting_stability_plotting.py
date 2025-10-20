@@ -642,7 +642,7 @@ def main():
         "--root_dir",
         type=str,
         default="naslib/optimizers/oneshot/gsparsity/result_final_hp",
-        help="The root directory containing the experiment runs (e.g., 'testv3/').",
+        help="The root directory containing the experiment runs.",
     )
     parser.add_argument(
         "--metric",
@@ -664,7 +664,7 @@ def main():
     parser.add_argument(
         "--out_dir",
         type=str,
-        default="plots_stability",
+        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots",
         help="Directory to save the generated plots.",
     )
     parser.add_argument(

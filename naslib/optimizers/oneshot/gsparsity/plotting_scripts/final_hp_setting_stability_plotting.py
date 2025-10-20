@@ -98,24 +98,33 @@ def get_color_shades(base_color, n_shades):
     )
 
 
+def format_method_label(optimizer, zcp_method):
+    """Human-friendly label for legend."""
+    return f"{optimizer} ({zcp_method})" if zcp_method else f"{optimizer}"
+
+
 def find_error_files(root_dir):
-    """Finds all 'errors.json' files and extracts metadata from their paths."""
+    """Finds all 'errors.json' files and extracts metadata from their paths.
+
+    Expected relative structures:
+      - With ZCP method: {optimizer}/{zcp_method}/{search_space}/{dataset}/{seed}/errors.json
+      - Without ZCP:     {optimizer}/{search_space}/{dataset}/{seed}/errors.json
+    """
     error_files = []
     for dirpath, _, filenames in os.walk(root_dir):
         if "errors.json" in filenames:
             full_path = os.path.join(dirpath, "errors.json")
-            # Normalize path for consistent parsing
             relative_path = os.path.relpath(full_path, root_dir)
             parts = relative_path.split(os.sep)
 
-            # Path structure: {optimizer}/{...}/{search_space}/{dataset}/{seed}/errors.json
+            # Ensure at least optimizer/search_space/dataset/seed/errors.json
             if len(parts) >= 5:
                 optimizer = parts[0]
                 seed = parts[-2]
                 dataset = parts[-3]
                 search_space = parts[-4]
-                # Handle potential extra directories like zcp_method
-                zcp_method = parts[1] if "zcp" in optimizer and len(parts) > 5 else None
+                # Detect zcp_method when there is an extra component after optimizer
+                zcp_method = parts[1] if len(parts) >= 6 else None
 
                 metadata = {
                     "path": full_path,
@@ -130,63 +139,95 @@ def find_error_files(root_dir):
 
 
 def process_run_data(filepath, acc_metric, dataset):
-    """Loads and processes a single run from an errors.json file."""
+    """
+    Loads and processes a single run from an errors.json file.
+    Use the queried values (same keys as the performance script), but return raw
+    queried accuracies (do not convert to incumbent).
+    """
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    if not data.get(acc_metric) or not data.get("runtime"):
+    # Use queried architecture performance for a fair comparison
+    queried_acc_metric = "queried_val_acc" if acc_metric == "valid_acc" else "queried_train_acc"
+
+    # Required keys: queried acc, scaled queried eval time (typo fallback), runtime
+    if not all(k in data for k in [queried_acc_metric, "runtime"]):
         return None, None, None
 
-    acc = np.array(data[acc_metric])
+    acc = np.array(data[queried_acc_metric])
+    # handle possible misspelling used elsewhere
+    eval_time = (
+        np.array(data["scaled_querried_train_time"])
+        if "scaled_querried_train_time" in data
+        else np.array(data.get("scaled_queried_train_time", []))
+    )
     runtime = np.array(data["runtime"])
-    loss = np.array(data.get("train_loss", []))  # Use train_loss to detect stages
+    loss = np.array(data.get("train_loss", []))
 
-    # Handle two-stage methods by checking for -1 in loss values
+    # basic length checks: prefer eval_time when present (some methods may not have it)
+    if eval_time.size and not (len(acc) == len(eval_time) == len(runtime)):
+        return None, None, None
+    if not eval_time.size and not (len(acc) == len(runtime)):
+        return None, None, None
+
+    # Handle different method styles (random search / two-stage / normal)
+    is_random_search = len(loss) > 0 and np.all(loss == -1)
     is_two_stage = -1 in loss
-    if is_two_stage:
+
+    if is_random_search:
+        total_time = np.cumsum(eval_time) if eval_time.size else np.cumsum(runtime)
+    elif is_two_stage:
         stage2_indices = np.where(loss != -1)[0]
-
-        # If there are no entries for stage 2, check if it's a fully queried method
         if len(stage2_indices) == 0:
-            # This is a fully queried method if all loss values are -1
-            if len(loss) > 0 and np.all(loss == -1):
-                # For fully queried methods, time is cumulative runtime
-                cumulative_time = np.cumsum(runtime)
-            else:
-                # It's a two-stage method that didn't reach stage 2, so skip.
-                return None, None, None
-        else:
-            # This is a standard two-stage method
-            first_stage2_idx = stage2_indices[0]
-            stage1_runtime = runtime[:first_stage2_idx].sum()
-
-            # Filter for stage 2 data
-            acc = acc[stage2_indices]
-            runtime = runtime[stage2_indices]
-
-            # Prepend the summed stage 1 runtime to the cumulative time of stage 2
-            cumulative_time = np.cumsum(runtime) + stage1_runtime
+            return None, None, None
+        first_stage2_idx = stage2_indices[0]
+        stage1_search_cost = runtime[:first_stage2_idx].sum()
+        stage2_runtime = runtime[stage2_indices]
+        acc = acc[stage2_indices]
+        eval_time = eval_time[stage2_indices] if eval_time.size else np.zeros_like(stage2_runtime)
+        stage2_cumulative_search_cost = np.cumsum(stage2_runtime)
+        total_time = stage1_search_cost + stage2_cumulative_search_cost + eval_time
     else:
-        # For single-stage methods, just calculate cumulative time
-        cumulative_time = np.cumsum(runtime)
+        cumulative_search_cost = np.cumsum(runtime)
+        total_time = cumulative_search_cost + (eval_time if eval_time.size else 0)
 
-    # If after processing, we have less than 1 point, we can't plot or calculate AUC.
     if len(acc) < 1:
         return None, None, None
 
-    # Prepend a random guess at time=0
-    num_classes = DATASET_CLASSES.get(dataset, 10)  # Default to 10 if unknown
-    random_guess_acc = 1.0 / num_classes
-    cumulative_time = np.insert(cumulative_time, 0, 0)
+    # Random guess prepend (preserve raw units like queried acc)
+    num_classes = DATASET_CLASSES.get(dataset, 10)
+    acc_is_percent = np.nanmax(acc) > 1.5
+    random_guess_acc = (100.0 / num_classes) if acc_is_percent else (1.0 / num_classes)
+
+    total_time = np.insert(total_time, 0, 0)
     acc = np.insert(acc, 0, random_guess_acc)
 
-    # The user wants to see the raw performance, not just the incumbent.
-    # incumbent_acc = np.maximum.accumulate(acc)
+    # Collapse duplicate timestamps: preserve first-occurrence order but keep latest raw value
+    seen = {}
+    order = []
+    for t, a in zip(total_time, acc):
+        if t not in seen:
+            order.append(t)
+        # for raw values, overwrite so the stored value becomes the latest seen for that timestamp
+        seen[t] = a
 
-    # Calculate AUC on the raw accuracy, handle cases with a single point.
-    run_auc = auc(cumulative_time, acc) if len(cumulative_time) >= 2 else 0.0
+    times_ordered = np.array([float(t) for t in order], dtype=float)
+    acc_ordered = np.array([seen[t] for t in order], dtype=float)
 
-    return cumulative_time, acc, run_auc
+    # enforce strictly increasing times for interpolation
+    if len(times_ordered) > 1:
+        eps = 1e-6
+        for i in range(1, len(times_ordered)):
+            if times_ordered[i] <= times_ordered[i - 1]:
+                times_ordered[i] = times_ordered[i - 1] + eps
+
+    # Compute run AUC on the raw queried values (not incumbent)
+    try:
+        run_auc = float(np.trapz(acc_ordered, times_ordered))
+    except Exception:
+        run_auc = 0.0
+
+    return times_ordered, acc_ordered, run_auc
 
 
 def plot_anytime_stability(
@@ -206,10 +247,10 @@ def plot_anytime_stability(
         print("No 'errors.json' files found. Exiting.")
         return
 
-    # Group runs by optimizer, dataset, and search space
+    # Group runs by optimizer, zcp_method (if any), dataset, and search space
     grouped_runs = defaultdict(list)
     for f in files:
-        key = (f["optimizer"], f["dataset"], f["search_space"])
+        key = (f["optimizer"], f.get("zcp_method"), f["dataset"], f["search_space"])
         grouped_runs[key].append(f)
 
     print(
@@ -224,15 +265,19 @@ def plot_anytime_stability(
         seed: MARKERS[i % len(MARKERS)] for i, seed in enumerate(all_seeds)
     }
 
-    # Consistent color/line per optimizer across datasets
-    optimizers = sorted(set(opt for (opt, _, _) in grouped_runs.keys()))
-    opt_to_color = {opt: COLORS[i % len(COLORS)] for i, opt in enumerate(optimizers)}
-    opt_to_fmt = {opt: FMTS[i % len(FMTS)] for i, opt in enumerate(optimizers)}
+    # Consistent color/line per (optimizer, zcp_method) across datasets
+    method_keys = sorted(set((opt, zcp) for (opt, zcp, _, _) in grouped_runs.keys()))
+    opt_to_color = {
+        (opt, zcp): COLORS[i % len(COLORS)] for i, (opt, zcp) in enumerate(method_keys)
+    }
+    opt_to_fmt = {
+        (opt, zcp): FMTS[i % len(FMTS)] for i, (opt, zcp) in enumerate(method_keys)
+    }
 
     if not combine_plots:
         ax = None  # Will be created inside the loop
-        # ...existing per-group plotting path remains unchanged...
-        for group_idx, ((optimizer, dataset, search_space), runs) in enumerate(
+        # per-group plotting with zcp support
+        for group_idx, ((optimizer, zcp_method, dataset, search_space), runs) in enumerate(
             grouped_runs.items()
         ):
             plt.figure(figsize=(12, 7))
@@ -241,9 +286,9 @@ def plot_anytime_stability(
             all_aucs = []
             all_trajectories = []
             all_valid_runs_meta = []
-            group_label = f"{optimizer}"
-            color = opt_to_color[optimizer]
-            fmt = opt_to_fmt[optimizer]
+            group_label = format_method_label(optimizer, zcp_method)
+            color = opt_to_color.get((optimizer, zcp_method), COLORS[0])
+            fmt = opt_to_fmt.get((optimizer, zcp_method), FMTS[0])
 
             print(f"\nProcessing {optimizer} on {dataset} ({search_space})...")
 
@@ -340,7 +385,7 @@ def plot_anytime_stability(
             max_acc = np.max(interpolated_accs, axis=0)
 
             # --- Weighted instability AUC (give real data more weight) ---
-            # Each seed contributes "real support" only after its first real point (t[1]).
+            # Each seed contributes "real support" only after its first real data point (t[1]).
             first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
             if first_real_times:
                 earliest_first = float(np.min(first_real_times))
@@ -456,7 +501,9 @@ def plot_anytime_stability(
                 ax.grid(True, which="both", ls="-", alpha=0.5)
 
                 filename = (
-                    f"stability_{optimizer}_{dataset}_{search_space}_{acc_metric}.png"
+                    f"stability_{optimizer}_{dataset}_{search_space}_{acc_metric}"
+                    + (f"_{zcp_method}" if zcp_method else "")
+                    + ".png"
                 )
                 save_path = os.path.join(output_dir, filename)
                 plt.savefig(save_path, bbox_inches="tight")
@@ -471,18 +518,20 @@ def plot_anytime_stability(
         fig = plt.figure(figsize=(14, 8))
         ax = plt.gca()
 
+        # keep zcp in the grouping for combined plots as well
         ds_groups = [
-            ((optimizer, ds, search_space), runs)
-            for ((optimizer, ds, search_space), runs) in grouped_runs.items()
+            ((optimizer, zcp_method, ds, search_space), runs)
+            for ((optimizer, zcp_method, ds, search_space), runs) in grouped_runs.items()
             if ds == dataset
         ]
 
-        for (optimizer, ds, search_space), runs in ds_groups:
+        # iterate with the correct unpacking including zcp_method
+        for ((optimizer, zcp_method, ds, search_space), runs) in ds_groups:
             all_aucs = []
             all_trajectories = []
             all_valid_runs_meta = []
-            group_label = f"{optimizer}"
-            color = opt_to_color[optimizer]
+            group_label = format_method_label(optimizer, zcp_method)
+            color = opt_to_color.get((optimizer, zcp_method), COLORS[0])
 
             print(f"  Processing {optimizer} on {dataset} ({search_space})...")
 

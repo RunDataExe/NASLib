@@ -372,7 +372,7 @@ def make_fixed_time_reports(metas, studies, out_dir):
         pd.DataFrame(rows).to_csv(os.path.join(out_dir, "fixed_time_leaderboard.csv"), index=False)
         pd.DataFrame(auc_rows).to_csv(os.path.join(out_dir, "auc_summary.csv"), index=False)
 
-def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None):
+def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, annot_pos="above_legend"):
     # Build HPO best per dataset/method from Optuna (highest acc over all trials, all states)
     best_rows = []
     for meta, st in zip(metas, studies):
@@ -450,6 +450,30 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None):
         xmax = float(max(g["hpo_search_best"].max(), g["mean_final"].max()))
         ax.plot([xmin, xmax], [xmin, xmax], linestyle="--", color="gray", linewidth=1)
 
+        # ---- quantitative annotations (no slope line) ----
+        x = g["hpo_search_best"].astype(float).to_numpy()
+        y = g["mean_final"].astype(float).to_numpy()
+        pearson = np.nan
+        if x.size >= 2 and np.nanstd(x) > 0 and np.nanstd(y) > 0:
+            pearson = float(np.corrcoef(x, y)[0, 1])
+        rx = pd.Series(x).rank(method="average").to_numpy()
+        ry = pd.Series(y).rank(method="average").to_numpy()
+        spearman = np.nan
+        if rx.size >= 2 and np.nanstd(rx) > 0 and np.nanstd(ry) > 0:
+            spearman = float(np.corrcoef(rx, ry)[0, 1])
+
+        delta_mean = float(g["delta_final_minus_hpo"].mean())
+        delta_std = float(g["delta_final_minus_hpo"].std(ddof=0))
+        avg_rank_shift = float(g["rank_shift"].mean())
+
+        lines = [
+            f"Pearson r = {pearson:.3f}" if np.isfinite(pearson) else "Pearson r = n/a",
+            f"Spearman ρ = {spearman:.3f}" if np.isfinite(spearman) else "Spearman ρ = n/a",
+            f"Δ Acc (Final Mean − HPO): {delta_mean:.3f} ± {delta_std:.3f}",
+            f"Mean Rank Shift: {avg_rank_shift:.2f}",
+        ]
+        txt = "\n".join(lines)
+
         # Legend with same method order
         present = {(r["optimizer_x"], None if (r["zcp_method"] is None or (isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"]))) else r["zcp_method"]) for _, r in g.iterrows()}
         handles = [
@@ -457,9 +481,34 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None):
                    linestyle="None", markersize=8, label=format_method_label(m[0], m[1]))
             for m in method_list if m in present
         ]
-        ax.legend(handles=handles, loc="lower right")  # align legend position
+        leg = ax.legend(handles=handles, loc="lower right")
 
-        # Axis style to mimic incumbent plots
+        # ---- place annotation either above legend or at bottom-left ----
+        if annot_pos == "bottom_left":
+            ax.text(
+                0.02, 0.02, txt,
+                transform=ax.transAxes,
+                va="bottom", ha="left",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="gray", linewidth=0.5),
+            )
+        else:
+            # above_legend
+            fig.canvas.draw()  # ensure we have a renderer
+            bbox_disp = leg.get_window_extent(renderer=fig.canvas.get_renderer())
+            bbox_ax = bbox_disp.transformed(ax.transAxes.inverted())
+            # place just above the legend, right-aligned to its right edge
+            x = min(bbox_ax.x1, 0.98)
+            y = min(bbox_ax.y1 + 0.02, 0.98)
+            ax.text(
+                x, y, txt,
+                transform=ax.transAxes,
+                va="bottom", ha="right",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="gray", linewidth=0.5),
+            )
+
+        # Axis style
         ax.set_xscale("linear")
         ax.set_yscale("linear")
         ax.set_xlim(left=0)
@@ -467,9 +516,9 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None):
         ax.xaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
 
-        ax.set_xlabel("HPO Search Validation Accuracy (%) [Linear Scale]")   # clearer x label
-        ax.set_ylabel("Final Mean Validation Accuracy (%) [Linear Scale]")   # clearer y label
-        ax.set_title(f"Search Phase -> Transfer -> Eval Phase  — {ds}")
+        ax.set_xlabel("HPO Search Validation Accuracy (%) [Linear Scale]")
+        ax.set_ylabel("Final Mean Validation Accuracy (%) [Linear Scale]")
+        ax.set_title(f"Search Phase -> Transfer -> Eval Phase | {ds}")
         ax.grid(True, ls="-", alpha=0.5)
         out_png = os.path.join(out_dir, f"{ds}_search_to_eval_scatter.png")
         plt.savefig(out_png, bbox_inches="tight")
@@ -482,6 +531,8 @@ def main():
     ap.add_argument("--out_dir", default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/hpo")
     ap.add_argument("--search_space", default="nasbench201")
     ap.add_argument("--final_root_dir", default="naslib/optimizers/oneshot/gsparsity/result_final_hp", help="Root dir of final runs (errors.json tree) to build Search→Eval transfer")
+    # NEW: where to place the annotation
+    ap.add_argument("--annot_pos", choices=["above_legend", "bottom_left"], default="above_legend")
     args = ap.parse_args()
 
     metas, studies = load_studies(args.db_dir, args.search_space)
@@ -491,7 +542,7 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     make_fixed_time_reports(metas, studies, args.out_dir)
-    make_search_to_eval_transfer(metas, studies, args.out_dir, final_root_dir=args.final_root_dir)
+    make_search_to_eval_transfer(metas, studies, args.out_dir, final_root_dir=args.final_root_dir, annot_pos=args.annot_pos)
 
 if __name__ == "__main__":
     main()

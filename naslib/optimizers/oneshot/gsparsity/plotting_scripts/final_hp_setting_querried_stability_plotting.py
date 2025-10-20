@@ -391,6 +391,18 @@ def plot_anytime_stability(
                         2 if marker == "+" else 1
                     )  # Make '+' thicker
 
+                    # Draw a thin line connecting the seed's datapoints (exclude t=0 random guess)
+                    if len(time) > 1:
+                        ax.plot(
+                            time[1:],
+                            acc[1:],
+                            color=seed_colors[i],
+                            linewidth=1.5 if marker == "+" else 1.0,
+                            alpha=0.6,
+                            linestyle="-",
+                            zorder=4,
+                        )
+
                     # Plot the raw data points as markers
                     plot_scatter_markers(
                         ax,
@@ -413,9 +425,23 @@ def plot_anytime_stability(
                     run_meta = all_valid_runs_meta[i]
                     marker = seed_to_marker.get(run_meta["seed"], "x")
 
-                    # Adjust marker size and width for '+'
+                    # Adjust marker size and width based on the marker type
                     current_markersize = 8 if marker == "+" else 5
-                    current_markeredgewidth = 2 if marker == "+" else 1
+                    current_markeredgewidth = (
+                        2 if marker == "+" else 1
+                    )  # Make '+' thicker
+
+                    # Draw a thin line connecting the seed's datapoints (exclude t=0 random guess)
+                    if len(time) > 1:
+                        ax.plot(
+                            time[1:],
+                            acc[1:],
+                            color=seed_colors[i],
+                            linewidth=1.5 if marker == "+" else 1.0,
+                            alpha=0.6,
+                            linestyle="-",
+                            zorder=4,
+                        )
 
                     # Plot the raw data points as markers
                     plot_scatter_markers(
@@ -427,10 +453,10 @@ def plot_anytime_stability(
                         seed=run_meta.get("seed", i),
                         max_time=max_time,
                         jitter_frac=1e-4,
-                        size=20,
-                        alpha=0.75,
+                        size=24,
+                        alpha=0.85,
                         edgecolor="white",
-                        linewidth=0.35,
+                        linewidth=0.4,
                         rasterize=True,
                     )
 
@@ -628,6 +654,19 @@ def plot_anytime_stability(
                  marker = seed_to_marker.get(run_meta["seed"], "x")
                  current_markersize = 8 if marker == "+" else 5
                  current_markeredgewidth = 2 if marker == "+" else 1
+
+                 # Draw a thin line connecting the seed's datapoints (exclude t=0 random guess)
+                 if len(time) > 1:
+                     ax.plot(
+                         time[1:],
+                         acc[1:],
+                         color=seed_colors[i],
+                         linewidth=1.5 if marker == "+" else 1.0,
+                         alpha=0.55,
+                         linestyle="-",
+                         zorder=4,
+                     )
+
                  plot_scatter_markers(
                      ax,
                      time[1:],

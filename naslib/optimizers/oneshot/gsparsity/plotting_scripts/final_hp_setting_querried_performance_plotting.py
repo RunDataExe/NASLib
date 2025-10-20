@@ -208,7 +208,7 @@ def process_run_data(filepath, acc_metric, dataset):
         return None, None, None
 
     acc = np.array(data[queried_acc_metric])
-    eval_time = np.array(data["scaled_queried_train_time"])
+    eval_time = np.array(data["scaled_querried_train_time"]) if "scaled_querried_train_time" in data else np.array(data["scaled_queried_train_time"])
     runtime = np.array(data["runtime"])
     loss = np.array(data.get("train_loss", []))
 
@@ -221,52 +221,70 @@ def process_run_data(filepath, acc_metric, dataset):
     is_random_search = len(loss) > 0 and np.all(loss == -1)
 
     if is_random_search:
-        # For Random Search, total time is just the cumulative evaluation time.
-        # 'runtime' in this case is the same as 'scaled_queried_train_time'.
         total_time = np.cumsum(eval_time)
-
     elif is_two_stage:
         stage2_indices = np.where(loss != -1)[0]
         if len(stage2_indices) == 0:
-            return None, None, None  # Incomplete two-stage run
+            return None, None, None
 
-        # Sum of search time from stage 1
         first_stage2_idx = stage2_indices[0]
         stage1_search_cost = runtime[:first_stage2_idx].sum()
 
-        # Filter data to only include stage 2
         stage2_runtime = runtime[stage2_indices]
         acc = acc[stage2_indices]
         eval_time = eval_time[stage2_indices]
 
-        # Cumulative search cost during stage 2
         stage2_cumulative_search_cost = np.cumsum(stage2_runtime)
-
-        # Total time = (stage 1 search) + (cumulative stage 2 search) + (eval time at each step)
         total_time = stage1_search_cost + stage2_cumulative_search_cost + eval_time
-
-    else:  # Single-stage search method
+    else:
         cumulative_search_cost = np.cumsum(runtime)
-        # Total time = (cumulative search cost) + (eval time at each step)
         total_time = cumulative_search_cost + eval_time
 
-    # If after processing, we have less than 1 point, we can't plot or calculate AUC.
     if len(acc) < 1:
         return None, None, None
 
-    # Prepend a random guess at time=0
+    # Ensure random guess uses same units as acc (percent vs fraction)
     num_classes = DATASET_CLASSES.get(dataset, 10)
-    random_guess_acc = 1.0 / num_classes
+    acc_is_percent = np.nanmax(acc) > 1.5
+    random_guess_acc = (100.0 / num_classes) if acc_is_percent else (1.0 / num_classes)
+
+    # Prepend random guess at time=0 (keeps original sequence order)
     total_time = np.insert(total_time, 0, 0)
     acc = np.insert(acc, 0, random_guess_acc)
 
-    # Use incumbent (best-so-far) performance on the original sequence of events
-    acc = np.maximum.accumulate(acc)
+    # --- Compute incumbent along the ORIGINAL order (no sorting) ---
+    acc_inc = np.maximum.accumulate(acc)
 
-    # Calculate AUC using the custom function that handles non-monotonic time.
-    run_auc = calculate_auc(total_time, acc)
+    # --- Collapse duplicate timestamps while preserving the first-occurrence order.
+    # For duplicates, keep the maximum incumbent observed for that timestamp.
+    seen = {}
+    order = []
+    for t, a in zip(total_time, acc_inc):
+        if t not in seen:
+            seen[t] = a
+            order.append(t)
+        else:
+            # update stored value to the maximum incumbent at this timestamp
+            if a > seen[t]:
+                seen[t] = a
 
-    return total_time, acc, run_auc
+    times_ordered = np.array([float(t) for t in order], dtype=float)
+    acc_ordered = np.array([seen[t] for t in order], dtype=float)
+
+    # --- Ensure non-decreasing timestamps for interpolation (preserve order, add tiny eps where needed) ---
+    if len(times_ordered) > 1:
+        eps = 1e-6  # tiny increment in seconds to enforce strict increase while preserving order
+        for i in range(1, len(times_ordered)):
+            if times_ordered[i] <= times_ordered[i - 1]:
+                times_ordered[i] = times_ordered[i - 1] + eps
+
+    # Calculate run AUC on the chronological incumbent sequence (no re-ordering)
+    try:
+        run_auc = float(np.trapz(acc_ordered, times_ordered))
+    except Exception:
+        run_auc = 0.0
+
+    return times_ordered, acc_ordered, run_auc
 
 
 def plot_anytime_performance(
@@ -371,7 +389,7 @@ def plot_anytime_performance(
                     # Interpolate seed data for a smooth curve
                     unique_indices = np.unique(time, return_index=True)[1]
                     interp_acc = np.interp(
-                        time_grid, time[unique_indices], acc[unique_indices]
+                        time_grid, time, acc
                     )
 
                     # Adjust marker size and width based on the marker type
@@ -422,7 +440,7 @@ def plot_anytime_performance(
                     # Interpolate seed data for a smooth curve
                     unique_indices = np.unique(time, return_index=True)[1]
                     interp_acc = np.interp(
-                        time_grid, time[unique_indices], acc[unique_indices]
+                        time_grid, time, acc
                     )
 
                     # Adjust marker size and width for '+'
@@ -593,7 +611,7 @@ def plot_anytime_performance(
                 ax.legend(
                     handles=handles + [std_dev_handle] + seed_handles,
                     labels=labels + ["Std. Dev."] + seed_labels,
-                    loc="upper left",
+                    loc="lower right",
                     ncol=1,  # vertical
                 )
 
@@ -709,7 +727,7 @@ def plot_anytime_performance(
                 # Interpolate seed data for a smooth curve
                 unique_indices = np.unique(time, return_index=True)[1]
                 interp_acc = np.interp(
-                    time_grid, time[unique_indices], acc[unique_indices]
+                    time_grid, time, acc
                 )
 
                 # Marker styling
@@ -755,10 +773,9 @@ def plot_anytime_performance(
             # Mean and std on common grid
             interpolated_accs = []
             for time, acc in all_trajectories:
-                unique_indices = np.unique(time, return_index=True)[1]
-                interp_acc = np.interp(
-                    time_grid, time[unique_indices], acc[unique_indices]
-                )
+                # process_run_data returns time-ordered, deduplicated arrays (preserving original order),
+                # so interpolate directly onto the common grid
+                interp_acc = np.interp(time_grid, time, acc)
                 interpolated_accs.append(interp_acc)
 
             mean_acc = np.mean(interpolated_accs, axis=0)
@@ -847,7 +864,7 @@ def plot_anytime_performance(
         ax.legend(
             handles=handles + [std_dev_handle] + seed_handles,
             labels=labels + ["Std. Dev."] + seed_labels,
-            loc="upper left",
+            loc="lower right",
             ncol=1,
         )
 

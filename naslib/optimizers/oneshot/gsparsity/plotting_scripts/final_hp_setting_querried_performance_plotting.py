@@ -115,6 +115,16 @@ def plot_scatter_markers(
     jitter = (prng.rand(len(x)) - 0.5) * jitter_amount
     x_j = np.array(x) + jitter
 
+    # Make '+' markers more visible: larger size, thicker stroke and high-contrast edge
+    if marker == "+":
+        size = max(size, 45)        # substantially larger
+        linewidth = max(linewidth, 0.5)
+        edgecolor = "black"
+        alpha = max(alpha, 0.95)
+    else:
+        edgecolor = edgecolor
+        linewidth = linewidth
+
     # Use scatter so we can control face/edge colors and rasterization
     ax.scatter(
         x_j,

@@ -52,6 +52,7 @@ import argparse
 import re
 from collections import defaultdict
 import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
 
 # Dataset classes for random guess calculation
 DATASET_CLASSES = {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120}
@@ -411,46 +412,41 @@ def plot_anytime_stability(
             # Start the "real" band exactly at the earliest real data point across seeds
             split_idx = int(np.searchsorted(time_grid, earliest_first))
 
-            # Optional: ultra-light preview before first real point (purely visual, not emphasized)
-            if split_idx > 0:
-                ax.fill_between(
-                    time_grid[: split_idx + 1],
-                    min_acc[: split_idx + 1],
-                    max_acc[: split_idx + 1],
-                    color=color,
-                    alpha=0.08,  # very light
-                    label=None,
-                )
-
-            # Real part of the instability area (heavier fill and legend label)
+            # Build instability legend entry but only draw the fill if requested.
             instability_label = f"{group_label}"
             if show_auc_text:
                 instability_label += f" | Instab. AUC (w): {instability_auc:.2f}"
 
-            ax.fill_between(
-                time_grid[split_idx:],
-                min_acc[split_idx:],
-                max_acc[split_idx:],
-                color=color,
-                alpha=0.30,
-                label=instability_label,
-            )
-
             if show_auc_fill:
-                # This option is kept for argument compatibility but has no separate effect.
-                # The primary visualization is the min-max fill.
-                pass
+                # preview before first real point (very light) and main band
+                if split_idx > 0:
+                    ax.fill_between(
+                        time_grid[: split_idx + 1],
+                        min_acc[: split_idx + 1],
+                        max_acc[: split_idx + 1],
+                        color=color,
+                        alpha=0.08,
+                        label=None,
+                    )
+                ax.fill_between(
+                    time_grid[split_idx:],
+                    min_acc[split_idx:],
+                    max_acc[split_idx:],
+                    color=color,
+                    alpha=0.30,
+                    label=instability_label,
+                )
+                instability_handle = Patch(facecolor=color, alpha=0.3)
+            else:
+                # Do not draw the colored band on the axes; still provide a legend handle
+                # that shows the method color (outline) so the legend indicates the area.
+                instability_handle = Patch(facecolor="none", edgecolor=color, linewidth=1.5)
 
             # --- Final Plot Configuration (for individual plots) ---
             if not combine_plots:
                 from matplotlib.lines import Line2D
-                from matplotlib.patches import Patch
 
-                # Get existing handles and labels (should just be the instability area)
-                _, labels = ax.get_legend_handles_labels()
-
-                # Create a custom handle for the instability area with the heavier alpha
-                instability_handle = Patch(facecolor=color, alpha=0.3)
+                # Use our prepared instability_handle (band may or may not have been drawn)
                 handles = [instability_handle]
 
                 # Create custom legend handles for each seed's marker
@@ -478,7 +474,7 @@ def plot_anytime_stability(
                 # Combine handles and create the legend
                 ax.legend(
                     handles=handles + seed_handles,
-                    labels=labels + seed_labels,
+                    labels=[instability_label] + seed_labels,
                     loc="upper left",
                     ncol=1,
                 )
@@ -525,117 +521,128 @@ def plot_anytime_stability(
             if ds == dataset
         ]
 
+        # collect explicit method handles & labels so we can always show method legend entries
+        method_handles = []
+        method_labels = []
         # iterate with the correct unpacking including zcp_method
         for ((optimizer, zcp_method, ds, search_space), runs) in ds_groups:
-            all_aucs = []
-            all_trajectories = []
-            all_valid_runs_meta = []
-            group_label = format_method_label(optimizer, zcp_method)
-            color = opt_to_color.get((optimizer, zcp_method), COLORS[0])
+             all_aucs = []
+             all_trajectories = []
+             all_valid_runs_meta = []
+             group_label = format_method_label(optimizer, zcp_method)
+             color = opt_to_color.get((optimizer, zcp_method), COLORS[0])
 
-            print(f"  Processing {optimizer} on {dataset} ({search_space})...")
+             print(f"  Processing {optimizer} on {dataset} ({search_space})...")
 
-            for run_meta in runs:
-                time, acc, run_auc = process_run_data(
-                    run_meta["path"], acc_metric, dataset
-                )
-                if time is None:
-                    print(f"    - Skipping seed {run_meta['seed']} (no data).")
-                    continue
-                all_aucs.append(run_auc)
-                all_trajectories.append((time, acc))
-                all_valid_runs_meta.append(run_meta)
+             for run_meta in runs:
+                 time, acc, run_auc = process_run_data(
+                     run_meta["path"], acc_metric, dataset
+                 )
+                 if time is None:
+                     print(f"    - Skipping seed {run_meta['seed']} (no data).")
+                     continue
+                 all_aucs.append(run_auc)
+                 all_trajectories.append((time, acc))
+                 all_valid_runs_meta.append(run_meta)
 
-            if not all_trajectories:
-                print("    - No valid data for this group. Skipping.")
-                continue
+             if not all_trajectories:
+                 print("    - No valid data for this group. Skipping.")
+                 continue
 
-            # Seed shades
-            num_seeds = len(all_trajectories)
-            seed_colors = get_color_shades(color, num_seeds)
+             # Seed shades
+             num_seeds = len(all_trajectories)
+             seed_colors = get_color_shades(color, num_seeds)
 
-            max_time = max(t[-1] for t, a in all_trajectories)
-            time_grid = np.linspace(0, max_time, 500)
+             max_time = max(t[-1] for t, a in all_trajectories)
+             time_grid = np.linspace(0, max_time, 500)
 
-            # Plot individual seeds
-            for i, (time, acc) in enumerate(all_trajectories):
-                run_meta = all_valid_runs_meta[i]
-                marker = seed_to_marker.get(run_meta["seed"], "x")
-                current_markersize = 8 if marker == "+" else 5
-                current_markeredgewidth = 2 if marker == "+" else 1
-                ax.plot(
-                    time[1:],
-                    acc[1:],
-                    linestyle="None",
-                    marker=marker,
-                    color=seed_colors[i],
-                    markersize=current_markersize,
-                    markeredgewidth=current_markeredgewidth,
-                    alpha=0.7,
-                    label=None,
-                )
+             # Plot individual seeds
+             for i, (time, acc) in enumerate(all_trajectories):
+                 run_meta = all_valid_runs_meta[i]
+                 marker = seed_to_marker.get(run_meta["seed"], "x")
+                 current_markersize = 8 if marker == "+" else 5
+                 current_markeredgewidth = 2 if marker == "+" else 1
+                 ax.plot(
+                     time[1:],
+                     acc[1:],
+                     linestyle="None",
+                     marker=marker,
+                     color=seed_colors[i],
+                     markersize=current_markersize,
+                     markeredgewidth=current_markeredgewidth,
+                     alpha=0.7,
+                     label=None,
+                 )
 
-            # Interpolate to compute min/max band
-            interpolated_accs = []
-            for time, acc in all_trajectories:
-                unique_indices = np.unique(time, return_index=True)[1]
-                interp_acc = np.interp(
-                    time_grid, time[unique_indices], acc[unique_indices]
-                )
-                interpolated_accs.append(interp_acc)
+             # Interpolate to compute min/max band
+             interpolated_accs = []
+             for time, acc in all_trajectories:
+                 unique_indices = np.unique(time, return_index=True)[1]
+                 interp_acc = np.interp(
+                     time_grid, time[unique_indices], acc[unique_indices]
+                 )
+                 interpolated_accs.append(interp_acc)
 
-            min_acc = np.min(interpolated_accs, axis=0)
-            max_acc = np.max(interpolated_accs, axis=0)
+             min_acc = np.min(interpolated_accs, axis=0)
+             max_acc = np.max(interpolated_accs, axis=0)
 
-            # Weighted instability (real points count more)
-            first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
-            if first_real_times:
-                earliest_first = float(np.min(first_real_times))
-                frt_arr = np.array(first_real_times)
-                weights = np.mean(time_grid[:, None] >= frt_arr[None, :], axis=1)
-            else:
-                earliest_first = 0.0
-                weights = np.ones_like(time_grid)
+             # Weighted instability (real points count more)
+             first_real_times = [t[1] for t, a in all_trajectories if len(t) > 1]
+             if first_real_times:
+                 earliest_first = float(np.min(first_real_times))
+                 frt_arr = np.array(first_real_times)
+                 weights = np.mean(time_grid[:, None] >= frt_arr[None, :], axis=1)
+             else:
+                 earliest_first = 0.0
+                 weights = np.ones_like(time_grid)
 
-            unweighted_instability_auc = auc(time_grid, max_acc) - auc(
-                time_grid, min_acc
-            )
-            weighted_band = (max_acc - min_acc) * weights
-            instability_auc = auc(time_grid, weighted_band)
-            print(
-                f"    - Instability Area (weighted): {instability_auc:.2f} | (unweighted): {unweighted_instability_auc:.2f}"
-            )
+             unweighted_instability_auc = auc(time_grid, max_acc) - auc(
+                 time_grid, min_acc
+             )
+             weighted_band = (max_acc - min_acc) * weights
+             instability_auc = auc(time_grid, weighted_band)
+             print(
+                 f"    - Instability Area (weighted): {instability_auc:.2f} | (unweighted): {unweighted_instability_auc:.2f}"
+             )
 
-            instability_label = f"{group_label}"
-            if show_auc_text:
-                instability_label += f" | Instab. AUC (w): {instability_auc:.2f}"
+             instability_label = f"{group_label}"
+             if show_auc_text:
+                 instability_label += f" | Instab. AUC (w): {instability_auc:.2f}"
 
-            # Split fill at earliest real time across seeds (visual fix)
-            split_idx = int(np.searchsorted(time_grid, earliest_first))
+             # Split fill at earliest real time across seeds (visual fix)
+             split_idx = int(np.searchsorted(time_grid, earliest_first))
 
-            if split_idx > 0:
-                ax.fill_between(
-                    time_grid[: split_idx + 1],
-                    min_acc[: split_idx + 1],
-                    max_acc[: split_idx + 1],
-                    color=color,
-                    alpha=0.08,
-                    label=None,
-                )
-            ax.fill_between(
-                time_grid[split_idx:],
-                min_acc[split_idx:],
-                max_acc[split_idx:],
-                color=color,
-                alpha=0.30,
-                label=instability_label,
-            )
+             # Only draw the band if requested. Always create a legend handle.
+             if show_auc_fill:
+                 if split_idx > 0:
+                     ax.fill_between(
+                         time_grid[: split_idx + 1],
+                         min_acc[: split_idx + 1],
+                         max_acc[: split_idx + 1],
+                         color=color,
+                         alpha=0.08,
+                         label=None,
+                     )
+                 ax.fill_between(
+                     time_grid[split_idx:],
+                     min_acc[split_idx:],
+                     max_acc[split_idx:],
+                     color=color,
+                     alpha=0.30,
+                     label=instability_label,
+                 )
+                 instability_handle = Patch(facecolor=color, alpha=0.3)
+             else:
+                 instability_handle = Patch(facecolor="none", edgecolor=color, linewidth=1.5)
 
-        # Legend: methods + seed markers
+             # collect method handle/label for the combined legend
+             method_handles.append(instability_handle)
+             method_labels.append(instability_label)
+
+        # Legend: methods + seed markers (use collected method_handles so legend entries exist even
+        # when bands were not drawn)
         from matplotlib.lines import Line2D
-        from matplotlib.patches import Patch
 
-        handles, labels = ax.get_legend_handles_labels()
         seed_handles = []
         seed_labels = []
         for seed, marker in sorted(seed_to_marker.items()):
@@ -652,8 +659,8 @@ def plot_anytime_stability(
             seed_labels.append(f"{seed}")
 
         ax.legend(
-            handles=handles + seed_handles,
-            labels=labels + seed_labels,
+            handles=method_handles + seed_handles,
+            labels=method_labels + seed_labels,
             loc="upper left",
             ncol=1,
         )

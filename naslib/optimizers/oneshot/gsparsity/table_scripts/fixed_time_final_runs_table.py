@@ -8,6 +8,8 @@ from typing import Dict, Optional, Tuple, List
 import numpy as np
 import pandas as pd
 
+# Extra time budget for Random Search (in seconds)
+EXTRA_T_RANDOM_SEARCH = 48 * 3600  # 48 hours
 
 def latex_escape(text: Optional[str]) -> str:
     if text is None:
@@ -307,7 +309,7 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, time
     cap = (
         "Fixed-time comparison at the maximum common budget T per dataset (cumulative search cost + final evaluation). "
         + "; ".join(parts)
-        + ". Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]."
+        + ". Random Search uses T+48h runtime. Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]."
     )
 
     lines.extend(
@@ -375,6 +377,10 @@ def main() -> None:
         if ds not in times_by_dataset:
             continue
         T = times_by_dataset[ds]
+        # Give Random Search an additional 48h evaluation horizon
+        if r["optimizer"] == "random_search":
+            T += EXTRA_T_RANDOM_SEARCH
+
         best_train = best_within_T(r["times"], r["train"], T)
         best_valid = best_within_T(r["times"], r["valid"], T)
         auc_train = auc_over_T(r["times"], r["train"], T)

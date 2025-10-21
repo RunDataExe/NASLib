@@ -1255,15 +1255,9 @@ def main():
         type=str,
         default="distribution",
         choices=["train_acc", "valid_acc", "distribution"],
-        help="The accuracy metric to plot or 'distribution' for the final accuracy plot.",
+        help="The accuracy metric to plot or 'distribution' for the final accuracy plots (all datasets).",
     )
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="cifar100",
-        choices=["cifar100", "ImageNet16-120", "cifar10"],
-        help="The dataset to generate the distribution plot for.",
-    )
+    # Removed --dataset argument to always try all datasets
     parser.add_argument(
         "--show_auc_fill",
         action="store_true",
@@ -1289,11 +1283,17 @@ def main():
     args = parser.parse_args()
 
     if args.metric == "distribution":
-        plot_final_accuracy_distribution(
-            root_dir=args.root_dir,
-            dataset=args.dataset,
-            output_dir=args.out_dir,
-        )
+        # Try to build/plot distributions for all NB201 datasets
+        datasets = ["cifar10", "cifar100", "ImageNet16-120"]
+        for ds in datasets:
+            try:
+                plot_final_accuracy_distribution(
+                    root_dir=args.root_dir,
+                    dataset=ds,
+                    output_dir=args.out_dir,
+                )
+            except Exception as e:
+                print(f"[WARN] Skipping dataset {ds} due to error: {e}")
     else:
         plot_anytime_performance(
             root_dir=args.root_dir,

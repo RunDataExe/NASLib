@@ -79,7 +79,7 @@ parser.add_argument(
     "--optimizer",
     type=str,
     required=True,
-    help="Optimizer type (rs, ls, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
+    help="Optimizer type (random_search, local_search, bananas, drnas, gsparsity, zcp_gsparsity, inverted_bananas, inverted_bananas_gsparsity, inverted_bananas_zcp_gsparsity, random_sampling, self_training_bananas, self_training_inverted_bananas, self_training_inverted_bananas_gsparsity, self_training_inverted_bananas_zcp_gsparsity)",
 )
 # Add ZCP-specific arguments
 parser.add_argument(
@@ -158,7 +158,7 @@ evaluation = {
     "auxiliary_weight": 0.4,
 }
 optimizer_configs = {
-    "rs": {
+    "random_search": {
         "search": {
             "checkpoint_freq": 1,
             "epochs": search_epochs,
@@ -172,7 +172,7 @@ optimizer_configs = {
             "fidelity": -1,
         },
     },
-    "ls": {
+    "local_search": {
         "search": {
             "checkpoint_freq": 5,
             "epochs": search_epochs,
@@ -821,9 +821,9 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
     dataset_api = get_dataset_api(search_space_type, dataset)
 
     # Instantiate the optimizer
-    if optimizer_type == "rs" or optimizer_type == "random_sampling":
+    if optimizer_type == "random_search" or optimizer_type == "random_sampling":
         optimizer = RandomSearch(config)
-    elif optimizer_type == "ls":
+    elif optimizer_type == "local_search":
         optimizer = LocalSearch(config)
     elif optimizer_type == "bananas":
         optimizer = Bananas(config)
@@ -889,8 +889,8 @@ def run_optimizer(optimizer_type, search_space_type, dataset, config, seed):
             dataset_api=dataset_api,
         )
     elif optimizer_type in [
-        "rs",
-        "ls",
+        "random_search",
+        "local_search",
         "bananas",
         "inverted_bananas",
         "random_sampling",

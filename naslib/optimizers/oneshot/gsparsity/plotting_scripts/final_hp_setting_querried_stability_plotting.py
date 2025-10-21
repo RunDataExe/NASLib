@@ -198,28 +198,38 @@ def find_error_files(root_dir):
 def process_run_data(filepath, acc_metric, dataset):
     """
     Loads and processes a single run from an errors.json file.
-    Use the queried values (same keys as the performance script), but return raw
-    queried accuracies (do not convert to incumbent).
+    Use the queried values (same keys as the performance script) for non-random-search runs,
+    but for random search use the raw 'valid_acc' (or 'train_acc' if requested).
     """
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    # Use queried architecture performance for a fair comparison
-    queried_acc_metric = "queried_val_acc" if acc_metric == "valid_acc" else "queried_train_acc"
+    # Pull runtime and loss first so we can detect random search and two-stage runs
+    runtime = np.array(data.get("runtime", []))
+    loss = np.array(data.get("train_loss", []))
 
-    # Required keys: queried acc, scaled queried eval time (typo fallback), runtime
-    if not all(k in data for k in [queried_acc_metric, "runtime"]):
+    # Decide which accuracy series to use
+    # - For random search use raw 'valid_acc'/'train_acc' if present
+    # - Otherwise use 'queried_val_acc'/'queried_train_acc'
+    is_random_search = len(loss) > 0 and np.all(loss == -1)
+
+    if acc_metric == "valid_acc":
+        acc_key = "valid_acc" if is_random_search and "valid_acc" in data else "queried_val_acc"
+    else:  # acc_metric == "train_acc"
+        acc_key = "train_acc" if is_random_search and "train_acc" in data else "queried_train_acc"
+
+    acc = np.array(data.get(acc_key, []))
+
+    # Required keys check
+    if runtime.size == 0 or acc.size == 0:
         return None, None, None
 
-    acc = np.array(data[queried_acc_metric])
     # handle possible misspelling used elsewhere
     eval_time = (
         np.array(data["scaled_querried_train_time"])
         if "scaled_querried_train_time" in data
         else np.array(data.get("scaled_queried_train_time", []))
     )
-    runtime = np.array(data["runtime"])
-    loss = np.array(data.get("train_loss", []))
 
     # basic length checks: prefer eval_time when present (some methods may not have it)
     if eval_time.size and not (len(acc) == len(eval_time) == len(runtime)):
@@ -228,8 +238,8 @@ def process_run_data(filepath, acc_metric, dataset):
         return None, None, None
 
     # Handle different method styles (random search / two-stage / normal)
-    is_random_search = len(loss) > 0 and np.all(loss == -1)
-    is_two_stage = -1 in loss
+    # note: keep two-stage flag distinct; random search already handled above
+    is_two_stage = (-1 in loss)
 
     if is_random_search:
         total_time = np.cumsum(eval_time) if eval_time.size else np.cumsum(runtime)
@@ -265,7 +275,6 @@ def process_run_data(filepath, acc_metric, dataset):
     for t, a in zip(total_time, acc):
         if t not in seen:
             order.append(t)
-        # for raw values, overwrite so the stored value becomes the latest seen for that timestamp
         seen[t] = a
 
     times_ordered = np.array([float(t) for t in order], dtype=float)
@@ -278,7 +287,7 @@ def process_run_data(filepath, acc_metric, dataset):
             if times_ordered[i] <= times_ordered[i - 1]:
                 times_ordered[i] = times_ordered[i - 1] + eps
 
-    # Compute run AUC on the raw queried values (not incumbent)
+    # Compute run AUC on the selected values
     try:
         run_auc = float(np.trapz(acc_ordered, times_ordered))
     except Exception:

@@ -251,7 +251,7 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool) -> N
             r"\end{tabular}",
             r"\end{adjustbox}",
             r"}",
-            r"\caption{Cumulative time (search + final evaluation) and final queried accuracies (mean $\pm$ std) averaged over three seeds on the NAS-Bench-201 search space.}",
+            r"\caption{For one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost. Final queried accuracies (mean $\pm$ std) averaged over three seeds on the NAS-Bench-201 search space.}",
             r"\label{tab:final_hp_performance}",
             r"\end{table}",
         ]

@@ -307,10 +307,11 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, time
     # Caption mentions T per dataset (seconds)
     parts = [f"{ds}: T = {int(t)} s" for ds, t in sorted(times_by_dataset.items())]
     cap = (
-        "Fixed-time comparison at the maximum common budget T per dataset (cumulative search cost + final evaluation). "
-        + "; ".join(parts)
-        + ". Random Search uses T+48h runtime. Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]."
-    )
+            "Fixed-time comparison at the maximum common budget T per dataset (for one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost). "
+            + "; ".join(parts)
+            + ". Random Search uses T+48h only for Best@T; AUC is computed at the common T for all methods. "
+            + "Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]."
+        )
 
     lines.extend(
         [
@@ -376,15 +377,17 @@ def main() -> None:
         ds = r["dataset"]
         if ds not in times_by_dataset:
             continue
-        T = times_by_dataset[ds]
-        # Give Random Search an additional 48h evaluation horizon
-        if r["optimizer"] == "random_search":
-            T += EXTRA_T_RANDOM_SEARCH
+        T_common = times_by_dataset[ds]
 
-        best_train = best_within_T(r["times"], r["train"], T)
-        best_valid = best_within_T(r["times"], r["valid"], T)
-        auc_train = auc_over_T(r["times"], r["train"], T)
-        auc_valid = auc_over_T(r["times"], r["valid"], T)
+        # Best@T: allow +48h for Random Search
+        T_best = T_common + (EXTRA_T_RANDOM_SEARCH if r["optimizer"] == "random_search" else 0.0)
+        # AUC@T: always use the common T for fairness
+        T_auc = T_common
+
+        best_train = best_within_T(r["times"], r["train"], T_best)
+        best_valid = best_within_T(r["times"], r["valid"], T_best)
+        auc_train = auc_over_T(r["times"], r["train"], T_auc)
+        auc_valid = auc_over_T(r["times"], r["valid"], T_auc)
         grouped[(r["optimizer"], r["zcp_method"], ds, r["search_space"])].append(
             {
                 "best_T_train": best_train,

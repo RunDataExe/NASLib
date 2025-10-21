@@ -654,20 +654,21 @@ def objective(trial):
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
             },
         }
-        # Data augmentation
-        cutout = trial.suggest_categorical("cutout", [False, True])
-        config["search"]["cutout"] = cutout
-        if cutout:
-            config["search"]["cutout_length"] = trial.suggest_int(
-                "cutout_length", 8, 20
-            )
-            config["search"]["cutout_prob"] = trial.suggest_float(
-                "cutout_prob", 0.5, 1.0
-            )
+        # # Data augmentation
+        # cutout = trial.suggest_categorical("cutout", [False, True])
+        # config["search"]["cutout"] = cutout
+        # if cutout:
+        #     config["search"]["cutout_length"] = trial.suggest_int(
+        #         "cutout_length", 8, 20
+        #     )
+        #     config["search"]["cutout_prob"] = trial.suggest_float(
+        #         "cutout_prob", 0.5, 1.0
+        #     )
 
     # Suggest cutout parameter for relevant optimizers
     if optimizer_type in [
         "gsparsity",
+        "darts",
         "zcp_gsparsity",
         "inverted_bananas_gsparsity",
         "inverted_bananas_zcp_gsparsity",

@@ -33,12 +33,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source",
-        required=True,
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases",
         help="SQLite DB file (*.db) or directory containing Optuna studies.",
     )
     parser.add_argument(
         "--output",
-        default="naslib/optimizers/oneshot/gsparsity/result_final_hp/final_hp_summary.xlsx",
+        default="naslib/optimizers/oneshot/gsparsity/table_scripts/tables/final_hp_summary.xlsx",
         help="Excel file to create.",
     )
     parser.add_argument(

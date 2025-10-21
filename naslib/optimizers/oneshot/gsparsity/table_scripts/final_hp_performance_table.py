@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=str,
-        default="naslib/optimizers/oneshot/gsparsity/result_final_hp/final_performance_summary.xlsx",
+        default="naslib/optimizers/oneshot/gsparsity/table_scripts/tables/final_performance_summary.xlsx",
         help="Output file path (.xlsx or .csv).",
     )
     parser.add_argument(
@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--latex_output",
         type=str,
-        default="",
+        default="naslib/optimizers/oneshot/gsparsity/table_scripts/tables/final_performance_summary_table.txt",
         help="Optional path for the LaTeX table (.txt). Defaults to output base name.",
     )
     return parser.parse_args()

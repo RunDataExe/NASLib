@@ -580,6 +580,9 @@ for opt in optimizer_configs:
     optimizer_configs[opt]["evaluation"] = evaluation
 
 for opt in optimizer_configs:
+    if opt == "random_search" or opt == "random_sampling" or opt == "local_search":
+        continue  # These optimizers do not use early stopping
+    
     optimizer_configs[opt]["search"]["early_stopping"] = {
         "criterion": "valid_loss",  # Can be 'train_acc', 'train_loss', 'valid_acc', 'valid_loss', or 'runtime'
         "patience": 10,  # Number of epochs to wait for improvement

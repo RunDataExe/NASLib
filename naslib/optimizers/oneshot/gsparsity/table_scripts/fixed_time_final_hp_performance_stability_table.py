@@ -11,6 +11,7 @@ import pandas as pd
 # Extra time budget for Random Search (in seconds)
 EXTRA_T_RANDOM_SEARCH = 48 * 3600  # 48 hours
 
+
 def latex_escape(text: Optional[str]) -> str:
     if text is None:
         return ""
@@ -128,8 +129,12 @@ def load_run_anytime(filepath: str) -> Optional[Dict[str, np.ndarray]]:
     if not all(k in data for k in required):
         return None
 
-    train_acc = _normalize_accuracy_scale(np.asarray(data["queried_train_acc"], dtype=float))
-    valid_acc = _normalize_accuracy_scale(np.asarray(data["queried_val_acc"], dtype=float))
+    train_acc = _normalize_accuracy_scale(
+        np.asarray(data["queried_train_acc"], dtype=float)
+    )
+    valid_acc = _normalize_accuracy_scale(
+        np.asarray(data["queried_val_acc"], dtype=float)
+    )
     eval_time = np.asarray(data["scaled_queried_train_time"], dtype=float)
     runtime = np.asarray(data["runtime"], dtype=float)
 
@@ -187,7 +192,9 @@ def load_run_anytime(filepath: str) -> Optional[Dict[str, np.ndarray]]:
     return {"times": times, "train": train_acc, "valid": valid_acc}
 
 
-def incumbent_curve_up_to_T(times: np.ndarray, acc: np.ndarray, T: float) -> Tuple[np.ndarray, np.ndarray]:
+def incumbent_curve_up_to_T(
+    times: np.ndarray, acc: np.ndarray, T: float
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Build incumbent staircase up to time T (inclusive).
     Returns xs, ys where ys is non-decreasing max-so-far at xs.
@@ -227,6 +234,183 @@ def best_within_T(times: np.ndarray, acc: np.ndarray, T: float) -> float:
     return float(np.nanmax(acc[mask]))
 
 
+# New helpers for stability band area (upper-lower envelope)
+def _dedup_sorted_times(
+    times: np.ndarray, values: np.ndarray, eps: float = 1e-12
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Ensure strictly increasing times by merging duplicates (keep last value for duplicate timestamps).
+    Returns sorted times and corresponding values.
+    """
+    order = np.argsort(times)
+    t = times[order]
+    v = values[order]
+    if t.size == 0:
+        return t, v
+    t_new = [t[0]]
+    v_new = [v[0]]
+    for ti, vi in zip(t[1:], v[1:]):
+        if abs(ti - t_new[-1]) <= eps:
+            # overwrite last value for duplicate time
+            t_new[-1] = ti
+            v_new[-1] = vi
+        else:
+            t_new.append(ti)
+            v_new.append(vi)
+    return np.asarray(t_new, dtype=float), np.asarray(v_new, dtype=float)
+
+
+def _segment_slopes(times: np.ndarray, values: np.ndarray) -> np.ndarray:
+    if times.size < 2:
+        return np.asarray([], dtype=float)
+    dt = np.diff(times)
+    dv = np.diff(values)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slopes = np.where(dt != 0.0, dv / dt, 0.0)
+    return slopes
+
+
+def _line_coeff_on_interval(
+    times: np.ndarray, values: np.ndarray, slopes: np.ndarray, t_mid: float
+) -> Tuple[float, float]:
+    """
+    For a given midpoint t_mid (assumed to be in an interval without internal breakpoints),
+    return (a, b) for y = a*t + b of the seed's piecewise-linear function at that interval,
+    using linear extrapolation before the first point and after the last point if needed.
+    """
+    n = times.size
+    if n == 0:
+        return 0.0, 0.0
+    if n == 1:
+        # Constant function
+        return 0.0, float(values[0])
+    if t_mid <= times[0]:
+        a = float(slopes[0])
+        b = float(values[0] - a * times[0])
+        return a, b
+    if t_mid >= times[-1]:
+        a = float(slopes[-1])
+        b = float(values[-1] - a * times[-1])
+        return a, b
+    # find segment idx so that times[idx] <= t_mid <= times[idx+1]
+    idx = np.searchsorted(times, t_mid, side="right") - 1
+    idx = int(np.clip(idx, 0, n - 2))
+    a = float(slopes[idx])
+    b = float(values[idx] - a * times[idx])
+    return a, b
+
+
+def _eval_piecewise_linear(
+    times: np.ndarray, values: np.ndarray, t_eval: np.ndarray
+) -> np.ndarray:
+    """
+    Evaluate a piecewise-linear curve at t_eval using linear interpolation and linear
+    extrapolation outside [times[0], times[-1]] based on first/last segment slopes.
+    """
+    n = times.size
+    if n == 0:
+        return np.full_like(t_eval, np.nan, dtype=float)
+    if n == 1:
+        return np.full_like(t_eval, float(values[0]), dtype=float)
+
+    y = np.interp(
+        t_eval, times, values
+    )  # linear interp within bounds, constant outside
+    slopes = _segment_slopes(times, values)
+
+    left_mask = t_eval < times[0]
+    if np.any(left_mask):
+        a0 = float(slopes[0])
+        y[left_mask] = values[0] + a0 * (t_eval[left_mask] - times[0])
+
+    right_mask = t_eval > times[-1]
+    if np.any(right_mask):
+        aL = float(slopes[-1])
+        y[right_mask] = values[-1] + aL * (t_eval[right_mask] - times[-1])
+
+    return y
+
+
+def band_area_over_T(seeds: List[Dict[str, np.ndarray]], key: str, T: float) -> float:
+    """
+    Compute the average band width (1/T * integral_0^T [max_seed f_s(t) - min_seed f_s(t)] dt)
+    where each seed curve f_s(t) is built by connecting its datapoints in natural order
+    with straight lines and extrapolating linearly to t=0 (and to T if needed).
+
+    seeds: list of dicts containing 'times' and the accuracy key ('train' or 'valid'), in fractional units.
+    key: 'train' or 'valid'
+    T: common horizon (seconds). Returns value in same units as accuracy (fractional).
+    """
+    if T <= 0:
+        return np.nan
+    if not seeds:
+        return np.nan
+    if len(seeds) == 1:
+        return 0.0
+
+    # Prepare per-seed cleaned curves
+    curves = []
+    for s in seeds:
+        t = np.asarray(s["times"], dtype=float)
+        y = np.asarray(s[key], dtype=float)
+        # keep only finite and t within [0, inf)
+        m = np.isfinite(t) & np.isfinite(y) & (t >= 0.0)
+        t, y = t[m], y[m]
+        t, y = _dedup_sorted_times(t, y)
+        if t.size == 0:
+            continue
+        curves.append((t, y, _segment_slopes(t, y)))
+    if len(curves) <= 1:
+        return 0.0
+
+    # Base grid: 0, T, and all seed timestamps clipped to [0, T]
+    grid = {0.0, float(T)}
+    for t, _, _ in curves:
+        # include internal timestamps within [0, T]
+        t_clip = t[(t >= 0.0) & (t <= T)]
+        grid.update(map(float, t_clip.tolist()))
+    g0 = np.array(sorted(grid), dtype=float)
+    if g0.size < 2:
+        return 0.0
+
+    # Add pairwise intersections of lines on each base interval to capture envelope switches
+    intersections = []
+    for i in range(g0.size - 1):
+        left, right = g0[i], g0[i + 1]
+        if right - left <= 0.0:
+            continue
+        t_mid = 0.5 * (left + right)
+        # collect line coeffs (a, b) for each seed on this interval
+        coeffs = [_line_coeff_on_interval(t, y, s, t_mid) for (t, y, s) in curves]
+        # check intersections for all pairs
+        n = len(coeffs)
+        for p in range(n):
+            a1, b1 = coeffs[p]
+            for q in range(p + 1, n):
+                a2, b2 = coeffs[q]
+                denom = a1 - a2
+                if abs(denom) <= 1e-18:
+                    continue
+                t_cross = (b2 - b1) / denom
+                if left < t_cross < right:
+                    intersections.append(float(t_cross))
+
+    if intersections:
+        g = np.array(sorted(set(g0.tolist() + intersections)), dtype=float)
+    else:
+        g = g0
+
+    # Evaluate all seeds on final grid and compute band height
+    Y = []
+    for t, y, _ in curves:
+        Y.append(_eval_piecewise_linear(t, y, g))
+    Y = np.vstack(Y)  # shape: (num_seeds, num_grid)
+    gap = np.nanmax(Y, axis=0) - np.nanmin(Y, axis=0)
+
+    area = np.trapz(gap, g)
+    return float(area / T)
+
+
 def write_output(df: pd.DataFrame, output_path: str) -> None:
     directory = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(directory, exist_ok=True)
@@ -247,7 +431,12 @@ def _format_pm(mean: float, std: float, decimals: int) -> str:
     return f"${formatted}$"
 
 
-def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, times_by_dataset: Dict[str, float]) -> None:
+def write_latex_table(
+    df: pd.DataFrame,
+    output_path: str,
+    fractional: bool,
+    times_by_dataset: Dict[str, float],
+) -> None:
     if df.empty:
         return
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -259,12 +448,21 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, time
         ("Optimizer", "optimizer"),
         ("Dataset", "dataset"),
         ("ZC Proxy", "zcp_method"),
-        (f"Best@T Train Acc{acc_header_suffix}", "best_T_train_mean", "best_T_train_std"),
+        (
+            f"Best@T Train Acc{acc_header_suffix}",
+            "best_T_train_mean",
+            "best_T_train_std",
+        ),
         (f"Best@T Val Acc{acc_header_suffix}", "best_T_valid_mean", "best_T_valid_std"),
         (f"Mean@T AUC Train Acc{acc_header_suffix}", "auc_train_mean", "auc_train_std"),
         (f"Mean@T AUC Val Acc{acc_header_suffix}", "auc_valid_mean", "auc_valid_std"),
+        (f"Band Area Train Acc{acc_header_suffix}", "band_area_train"),
+        (f"Band Area Val Acc{acc_header_suffix}", "band_area_valid"),
     ]
-    col_spec = "lllcccc"
+    col_spec = "lllcccccc"
+
+    # Numeric single-value columns to format with decimals
+    numeric_single_cols = {"band_area_train", "band_area_valid"}
 
     lines = [
         r"\begin{table}[ht]",
@@ -288,7 +486,11 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, time
                     raw_value = "None"
                 elif pd.isna(raw_value):
                     raw_value = ""
-                formatted.append(latex_escape(str(raw_value)))
+                if key in numeric_single_cols and raw_value != "":
+                    decimals = 4 if fractional else 2
+                    formatted.append(f"${float(raw_value):.{decimals}f}$")
+                else:
+                    formatted.append(latex_escape(str(raw_value)))
             else:
                 mean = float(row[col[1]])
                 std = float(row[col[2]])
@@ -307,11 +509,12 @@ def write_latex_table(df: pd.DataFrame, output_path: str, fractional: bool, time
     # Caption mentions T per dataset (seconds)
     parts = [f"{ds}: T = {int(t)} s" for ds, t in sorted(times_by_dataset.items())]
     cap = (
-            "Fixed-time comparison at the maximum common budget T per dataset (for one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost). "
-            + "; ".join(parts)
-            + ". Random Search uses T+48h only for Best@T; AUC is computed at the common T for all methods. "
-            + "Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]."
-        )
+        "Fixed-time comparison at the maximum common budget T per dataset (for one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost). "
+        + "; ".join(parts)
+        + ". Random Search uses T+48h only for Best@T; AUC is computed at the common T for all methods. "
+        + "Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]. "
+        + "Mean Band Gap is the time-averaged gap (1/T * $\int$[0,T] (max-min) dt) between the best and worst seed curves over [0, T] (lower is more stable)."
+    )
 
     lines.extend(
         [
@@ -359,7 +562,11 @@ def main() -> None:
     # Determine T per dataset: minimum of last time across all runs in that dataset
     times_by_dataset: Dict[str, float] = {}
     for dataset in sorted({r["dataset"] for r in runs}):
-        last_times = [float(r["times"][-1]) for r in runs if r["dataset"] == dataset and r["times"].size > 0]
+        last_times = [
+            float(r["times"][-1])
+            for r in runs
+            if r["dataset"] == dataset and r["times"].size > 0
+        ]
         if not last_times:
             continue
         T = float(np.min(last_times))
@@ -373,6 +580,7 @@ def main() -> None:
 
     # Aggregate per (optimizer, zcp_method, dataset, search_space)
     grouped = defaultdict(list)
+    runs_by_group = defaultdict(list)
     for r in runs:
         ds = r["dataset"]
         if ds not in times_by_dataset:
@@ -380,7 +588,9 @@ def main() -> None:
         T_common = times_by_dataset[ds]
 
         # Best@T: allow +48h for Random Search
-        T_best = T_common + (EXTRA_T_RANDOM_SEARCH if r["optimizer"] == "random_search" else 0.0)
+        T_best = T_common + (
+            EXTRA_T_RANDOM_SEARCH if r["optimizer"] == "random_search" else 0.0
+        )
         # AUC@T: always use the common T for fairness
         T_auc = T_common
 
@@ -388,7 +598,8 @@ def main() -> None:
         best_valid = best_within_T(r["times"], r["valid"], T_best)
         auc_train = auc_over_T(r["times"], r["train"], T_auc)
         auc_valid = auc_over_T(r["times"], r["valid"], T_auc)
-        grouped[(r["optimizer"], r["zcp_method"], ds, r["search_space"])].append(
+        key = (r["optimizer"], r["zcp_method"], ds, r["search_space"])
+        grouped[key].append(
             {
                 "best_T_train": best_train,
                 "best_T_valid": best_valid,
@@ -396,14 +607,31 @@ def main() -> None:
                 "auc_valid": auc_valid,
             }
         )
+        runs_by_group[key].append(r)
 
     factor = 1.0 if args.fractional else 100.0
     rows = []
-    for (optimizer, zcp_method, dataset, search_space), metrics in sorted(grouped.items()):
-        best_T_train_vals = np.array([m["best_T_train"] for m in metrics], dtype=float) * factor
-        best_T_valid_vals = np.array([m["best_T_valid"] for m in metrics], dtype=float) * factor
-        auc_train_vals = np.array([m["auc_train"] for m in metrics], dtype=float) * factor
-        auc_valid_vals = np.array([m["auc_valid"] for m in metrics], dtype=float) * factor
+    for (optimizer, zcp_method, dataset, search_space), metrics in sorted(
+        grouped.items()
+    ):
+        best_T_train_vals = (
+            np.array([m["best_T_train"] for m in metrics], dtype=float) * factor
+        )
+        best_T_valid_vals = (
+            np.array([m["best_T_valid"] for m in metrics], dtype=float) * factor
+        )
+        auc_train_vals = (
+            np.array([m["auc_train"] for m in metrics], dtype=float) * factor
+        )
+        auc_valid_vals = (
+            np.array([m["auc_valid"] for m in metrics], dtype=float) * factor
+        )
+
+        # Stability band area (average gap over [0, T]) for train/val
+        T_common = times_by_dataset[dataset]
+        seeds = runs_by_group[(optimizer, zcp_method, dataset, search_space)]
+        band_train = band_area_over_T(seeds, key="train", T=T_common) * factor
+        band_valid = band_area_over_T(seeds, key="valid", T=T_common) * factor
 
         rows.append(
             {
@@ -418,6 +646,8 @@ def main() -> None:
                 "auc_train_std": float(np.nanstd(auc_train_vals, ddof=0)),
                 "auc_valid_mean": float(np.nanmean(auc_valid_vals)),
                 "auc_valid_std": float(np.nanstd(auc_valid_vals, ddof=0)),
+                "band_area_train": float(band_train),
+                "band_area_valid": float(band_valid),
             }
         )
 
@@ -429,7 +659,10 @@ def main() -> None:
     df.sort_values(["dataset", "optimizer", "zcp_method"], inplace=True)
     write_output(df, args.output)
 
-    latex_output = args.latex_output or os.path.splitext(os.path.abspath(args.output))[0] + "_table.txt"
+    latex_output = (
+        args.latex_output
+        or os.path.splitext(os.path.abspath(args.output))[0] + "_table.txt"
+    )
     write_latex_table(df, latex_output, args.fractional, times_by_dataset)
 
     # Console hint for chosen T per dataset

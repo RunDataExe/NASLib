@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--source",
-        required=True,
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases",
         help="Path to a single SQLite DB file (*.db) or a directory containing study DBs.",
     )
     p.add_argument(

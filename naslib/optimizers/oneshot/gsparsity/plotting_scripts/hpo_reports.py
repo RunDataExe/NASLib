@@ -34,9 +34,14 @@ MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
 
+
 def _sort_key_method(m):
     # m is (optimizer, zcp_method); map None/NaN to '' for stable sorting
-    return (m[0] or "", "" if (m[1] is None or (isinstance(m[1], float) and np.isnan(m[1]))) else m[1])
+    return (
+        m[0] or "",
+        "" if (m[1] is None or (isinstance(m[1], float) and np.isnan(m[1]))) else m[1],
+    )
+
 
 # ---- robust filename parsing ----
 def _is_int_token(tok: str) -> bool:
@@ -45,6 +50,7 @@ def _is_int_token(tok: str) -> bool:
         return True
     except Exception:
         return False
+
 
 def canonical_optimizer_name(opt: str) -> str:
     """
@@ -58,6 +64,7 @@ def canonical_optimizer_name(opt: str) -> str:
     if "darts" in opt:
         return "darts"
     return opt
+
 
 def parse_db_basename(name: str) -> dict:
     """
@@ -105,14 +112,17 @@ def parse_db_basename(name: str) -> dict:
         "study_name": name,
     }
 
+
 # ---- Helpers ----
 def parse_meta(db_path):
     name = os.path.basename(db_path).replace(".db", "")
     return parse_db_basename(name)
 
+
 def method_key(meta):
     # keep zcp method in the key so each variant is a distinct method
     return (meta["optimizer"], meta["zcp_method"])
+
 
 def format_method_label(opt, zcp):
     # Avoid "(nan)" and empty tags
@@ -123,13 +133,17 @@ def format_method_label(opt, zcp):
     z = str(zcp).strip()
     return f"{opt}" if z.lower() == "nan" or z == "" else f"{opt} ({z})"
 
+
 # --- shared style maps so both plots use the same assignment ---
 def build_style_maps(metas):
-    method_list = sorted({(m["optimizer"], m["zcp_method"]) for m in metas}, key=_sort_key_method)
-    method_to_color  = {m: COLORS[i % len(COLORS)]   for i, m in enumerate(method_list)}
-    method_to_fmt    = {m: FMTS[i % len(FMTS)]       for i, m in enumerate(method_list)}
+    method_list = sorted(
+        {(m["optimizer"], m["zcp_method"]) for m in metas}, key=_sort_key_method
+    )
+    method_to_color = {m: COLORS[i % len(COLORS)] for i, m in enumerate(method_list)}
+    method_to_fmt = {m: FMTS[i % len(FMTS)] for i, m in enumerate(method_list)}
     method_to_marker = {m: MARKERS[i % len(MARKERS)] for i, m in enumerate(method_list)}
     return method_list, method_to_color, method_to_fmt, method_to_marker
+
 
 def trial_best_value(trial: optuna.trial.FrozenTrial):
     # use final value if COMPLETE; last intermediate for PRUNED/FAIL if available
@@ -143,8 +157,9 @@ def trial_best_value(trial: optuna.trial.FrozenTrial):
     # fallback: None
     return None
 
+
 def best_over_time(trials):
-    # Staircase incumbent vs wall-clock minutes (trial completion)
+    # Staircase incumbent vs wall-clock seconds (trial completion)
     starts = [t.datetime_start for t in trials if t.datetime_start]
     if not starts:
         return np.array([]), np.array([])
@@ -154,7 +169,8 @@ def best_over_time(trials):
         v = trial_best_value(t)
         if v is None or t.datetime_complete is None:
             continue
-        x = (t.datetime_complete - t0).total_seconds() / 60.0
+        # use seconds (no division by 60)
+        x = (t.datetime_complete - t0).total_seconds()
         events.append((x, v))
     if not events:
         return np.array([]), np.array([])
@@ -163,14 +179,17 @@ def best_over_time(trials):
     best = -np.inf
     for x, v in events:
         best = max(best, v)
-        xs.append(x); ys.append(best)
+        xs.append(x)
+        ys.append(best)
     return np.array(xs), np.array(ys)
+
 
 def incumbent_at(xs, ys, T):
     if len(xs) == 0:
         return np.nan
     idx = np.searchsorted(xs, T, side="right") - 1
     return ys[idx] if idx >= 0 else np.nan
+
 
 def normalized_auc(xs, ys, T, ref=None, y0: float = 0.0):
     """
@@ -190,6 +209,7 @@ def normalized_auc(xs, ys, T, ref=None, y0: float = 0.0):
         Y = np.clip(Y / ref, 0.0, 1.0)
     return float(np.trapz(Y, X) / T)
 
+
 def load_studies(db_dir, search_space_filter=None):
     dbs = sorted(glob.glob(os.path.join(db_dir, "*.db")))
     metas, studies = [], []
@@ -202,12 +222,16 @@ def load_studies(db_dir, search_space_filter=None):
         if search_space_filter and meta["search_space"] != search_space_filter:
             continue
         try:
-            st = optuna.load_study(storage=f"sqlite:///{db}", study_name=meta["study_name"])
+            st = optuna.load_study(
+                storage=f"sqlite:///{db}", study_name=meta["study_name"]
+            )
         except Exception as e:
             print(f"Skip {db}: {e}")
             continue
-        metas.append(meta); studies.append(st)
+        metas.append(meta)
+        studies.append(st)
     return metas, studies
+
 
 # ---- Final runs loader (errors.json), no CSV needed ----
 def find_error_files(root_dir):
@@ -225,9 +249,18 @@ def find_error_files(root_dir):
                 dataset = parts[-3]
                 search_space = parts[-4]
                 zcp_method = parts[1] if len(parts) >= 6 else None
-                files.append(dict(path=p, optimizer=optimizer, zcp_method=zcp_method,
-                                  dataset=dataset, search_space=search_space, seed=seed))
+                files.append(
+                    dict(
+                        path=p,
+                        optimizer=optimizer,
+                        zcp_method=zcp_method,
+                        dataset=dataset,
+                        search_space=search_space,
+                        seed=seed,
+                    )
+                )
     return files
+
 
 def load_final_runs(final_root_dir):
     if not final_root_dir or not os.path.isdir(final_root_dir):
@@ -243,29 +276,35 @@ def load_final_runs(final_root_dir):
             qva = data.get("queried_val_acc", None)
             if not isinstance(qva, list) or len(qva) == 0:
                 continue
-            rows.append({
-                "dataset": f["dataset"],
-                "optimizer": f["optimizer"],
-                "zcp_method": f["zcp_method"],  # may be None
-                "seed": f["seed"],
-                "final_acc": float(qva[-1]),
-            })
+            rows.append(
+                {
+                    "dataset": f["dataset"],
+                    "optimizer": f["optimizer"],
+                    "zcp_method": f["zcp_method"],  # may be None
+                    "seed": f["seed"],
+                    "final_acc": float(qva[-1]),
+                }
+            )
         except Exception:
             continue
     if not rows:
         return None
     df = pd.DataFrame(rows)
     # keep None groups (dropna=False)
-    agg = df.groupby(["dataset","optimizer","zcp_method"], dropna=False, as_index=False)["final_acc"] \
-            .agg(mean_final="mean", std_final="std", seeds="count")
+    agg = df.groupby(
+        ["dataset", "optimizer", "zcp_method"], dropna=False, as_index=False
+    )["final_acc"].agg(mean_final="mean", std_final="std", seeds="count")
     return agg
+
 
 # ---- Reports ----
 def make_fixed_time_reports(metas, studies, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
     # Build method style mapping (consistent order across plots)
-    method_list, method_to_color, method_to_fmt, method_to_marker = build_style_maps(metas)
+    method_list, method_to_color, method_to_fmt, method_to_marker = build_style_maps(
+        metas
+    )
 
     # Build curves grouped by dataset/method
     per = defaultdict(list)
@@ -320,23 +359,46 @@ def make_fixed_time_reports(metas, studies, out_dir):
             if not runs:
                 continue
             color = method_to_color[mkey]
-            fmt   = method_to_fmt[mkey]
-            marker= method_to_marker[mkey]
+            fmt = method_to_fmt[mkey]
+            marker = method_to_marker[mkey]
             label = format_method_label(mkey[0], mkey[1])
 
-            xs = runs[0]["xs"]; ys = runs[0]["ys"]
+            xs = runs[0]["xs"]
+            ys = runs[0]["ys"]
 
             # Metrics within dataset
-            acc_T1   = incumbent_at(xs, ys, T1)
-            acc_T2   = incumbent_at(xs, ys, T2)
-            auc_raw  = normalized_auc(xs, ys, T2, ref=None,  y0=0.0)     # use this for within-dataset comparison
-            auc_norm = normalized_auc(xs, ys, T2, ref=ref_ds, y0=0.0)    # optional normalized variant
+            acc_T1 = incumbent_at(xs, ys, T1)
+            acc_T2 = incumbent_at(xs, ys, T2)
+            auc_raw = normalized_auc(
+                xs, ys, T2, ref=None, y0=0.0
+            )  # use this for within-dataset comparison
+            auc_norm = normalized_auc(
+                xs, ys, T2, ref=ref_ds, y0=0.0
+            )  # optional normalized variant
 
-            rows.append(dict(dataset=dataset, optimizer=mkey[0], zcp_method=mkey[1],
-                             T1_min=T1, T2_min=T2, acc_T1=acc_T1, acc_T2=acc_T2,
-                             auc_raw_T2=auc_raw, auc_norm_T2=auc_norm))
-            auc_rows.append(dict(dataset=dataset, optimizer=mkey[0], zcp_method=mkey[1],
-                                 T2_min=T2, auc_raw_T2=auc_raw, auc_norm_T2=auc_norm))
+            rows.append(
+                dict(
+                    dataset=dataset,
+                    optimizer=mkey[0],
+                    zcp_method=mkey[1],
+                    T1_sec=T1,
+                    T2_sec=T2,
+                    acc_T1=acc_T1,
+                    acc_T2=acc_T2,
+                    auc_raw_T2=auc_raw,
+                    auc_norm_T2=auc_norm,
+                )
+            )
+            auc_rows.append(
+                dict(
+                    dataset=dataset,
+                    optimizer=mkey[0],
+                    zcp_method=mkey[1],
+                    T2_sec=T2,
+                    auc_raw_T2=auc_raw,
+                    auc_norm_T2=auc_norm,
+                )
+            )
 
             # Legend text with raw AUC
             legend_texts[mkey] = f"{label} | AUC = {auc_raw:.3f}"
@@ -344,35 +406,64 @@ def make_fixed_time_reports(metas, studies, out_dir):
             # Plot lines/markers
             tgrid = np.linspace(0, xs[-1], 500)
             interp = np.interp(tgrid, xs, ys)
-            ax.plot(tgrid, interp, color=color, linestyle=fmt, linewidth=2.5, label=label)
-            ax.plot(xs, ys, linestyle="None", marker=marker, color=color, markersize=5, markeredgewidth=1)
+            ax.plot(
+                tgrid, interp, color=color, linestyle=fmt, linewidth=2.5, label=label
+            )
+            ax.plot(
+                xs,
+                ys,
+                linestyle="None",
+                marker=marker,
+                color=color,
+                markersize=5,
+                markeredgewidth=1,
+            )
 
-        ax.set_xlabel("Wallclock Time (min) [Linear Scale]")
+        ax.set_xlabel("Wallclock Time (s) [Linear Scale]")
         ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
-        ax.set_title(f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201")
-        ax.set_xscale("linear"); ax.set_xlim(left=0); ax.set_ylim(bottom=0)
+        ax.set_title(
+            f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
+        )
+        ax.set_xscale("linear")
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 
         # legend in consistent order, with AUC numbers
         handles = [
-            Line2D([0],[0],
-                   color=method_to_color[m], linestyle=method_to_fmt[m], marker=method_to_marker[m],
-                   linewidth=2.5, markersize=6,
-                   label=legend_texts.get(m, format_method_label(m[0], m[1])))
-            for m in method_list if (dataset, m) in per
+            Line2D(
+                [0],
+                [0],
+                color=method_to_color[m],
+                linestyle=method_to_fmt[m],
+                marker=method_to_marker[m],
+                linewidth=2.5,
+                markersize=6,
+                label=legend_texts.get(m, format_method_label(m[0], m[1])),
+            )
+            for m in method_list
+            if (dataset, m) in per
         ]
         ax.legend(handles=handles, loc="center right")
 
         out_png = os.path.join(out_dir, f"hpo_anytime_{dataset}.png")
-        plt.savefig(out_png, bbox_inches="tight"); plt.close()
+        plt.savefig(out_png, bbox_inches="tight")
+        plt.close()
         print(f"Saved {out_png}")
 
     if rows:
-        pd.DataFrame(rows).to_csv(os.path.join(out_dir, "fixed_time_leaderboard.csv"), index=False)
-        pd.DataFrame(auc_rows).to_csv(os.path.join(out_dir, "auc_summary.csv"), index=False)
+        pd.DataFrame(rows).to_csv(
+            os.path.join(out_dir, "fixed_time_leaderboard.csv"), index=False
+        )
+        pd.DataFrame(auc_rows).to_csv(
+            os.path.join(out_dir, "auc_summary.csv"), index=False
+        )
 
-def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, annot_pos="above_legend"):
+
+def make_search_to_eval_transfer(
+    metas, studies, out_dir, final_root_dir=None, annot_pos="above_legend"
+):
     # Build HPO best per dataset/method from Optuna (highest acc over all trials, all states)
     best_rows = []
     for meta, st in zip(metas, studies):
@@ -383,12 +474,24 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
                 vals.append(v)
         if not vals:
             continue
-        best_rows.append(dict(dataset=meta["dataset"], optimizer=meta["optimizer"], zcp_method=meta["zcp_method"],
-                              hpo_search_best=float(np.max(vals))))
+        best_rows.append(
+            dict(
+                dataset=meta["dataset"],
+                optimizer=meta["optimizer"],
+                zcp_method=meta["zcp_method"],
+                hpo_search_best=float(np.max(vals)),
+            )
+        )
     if not best_rows:
         print("No HPO best values.")
         return
-    hpo_df = pd.DataFrame(best_rows).groupby(["dataset","optimizer","zcp_method"], dropna=False, as_index=False)["hpo_search_best"].max()
+    hpo_df = (
+        pd.DataFrame(best_rows)
+        .groupby(["dataset", "optimizer", "zcp_method"], dropna=False, as_index=False)[
+            "hpo_search_best"
+        ]
+        .max()
+    )
 
     # Load final runs from errors.json tree (no CSVs)
     final_df = load_final_runs(final_root_dir)
@@ -407,13 +510,16 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
     fin_m["merge_opt"] = fin_m["optimizer"].apply(canonical_optimizer_name)
 
     m = pd.merge(
-        hpo_m, fin_m,
-        left_on=["dataset","merge_opt","zcp_method"],
-        right_on=["dataset","merge_opt","zcp_method"],
-        how="inner"
+        hpo_m,
+        fin_m,
+        left_on=["dataset", "merge_opt", "zcp_method"],
+        right_on=["dataset", "merge_opt", "zcp_method"],
+        how="inner",
     )
     if m.empty:
-        print("No overlap between HPO and final runs (keys differ in dataset/optimizer/zcp_method).")
+        print(
+            "No overlap between HPO and final runs (keys differ in dataset/optimizer/zcp_method)."
+        )
         return
 
     # restore None for reporting/labels
@@ -421,11 +527,15 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
 
     m["delta_final_minus_hpo"] = m["mean_final"] - m["hpo_search_best"]
     # Ranks per dataset
-    m["rank_by_hpo"]   = m.groupby("dataset")["hpo_search_best"].rank(ascending=False, method="min")
-    m["rank_by_final"] = m.groupby("dataset")["mean_final"].rank(ascending=False, method="min")
-    m["rank_shift"]    = m["rank_by_final"] - m["rank_by_hpo"]
+    m["rank_by_hpo"] = m.groupby("dataset")["hpo_search_best"].rank(
+        ascending=False, method="min"
+    )
+    m["rank_by_final"] = m.groupby("dataset")["mean_final"].rank(
+        ascending=False, method="min"
+    )
+    m["rank_shift"] = m["rank_by_final"] - m["rank_by_hpo"]
 
-    m.sort_values(["dataset","mean_final"], ascending=[True, False]).to_csv(
+    m.sort_values(["dataset", "mean_final"], ascending=[True, False]).to_csv(
         os.path.join(out_dir, "search_to_eval_transfer.csv"), index=False
     )
 
@@ -433,17 +543,33 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
     method_list, method_to_color, _, method_to_marker = build_style_maps(metas)
 
     for ds, g in m.groupby("dataset"):
-        fig = plt.figure(figsize=(8,6))
+        fig = plt.figure(figsize=(8, 6))
         ax = plt.gca()
 
         for _, r in g.iterrows():
-            zcp = None if (r["zcp_method"] is None or (isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"]))) else r["zcp_method"]
+            zcp = (
+                None
+                if (
+                    r["zcp_method"] is None
+                    or (
+                        isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"])
+                    )
+                )
+                else r["zcp_method"]
+            )
             mk = (r["optimizer_x"], zcp)
             color = method_to_color.get(mk, COLORS[0])
-            marker= method_to_marker.get(mk, "o")
-            ax.plot(r["hpo_search_best"], r["mean_final"], marker=marker, color=color,
-                    linestyle="None", markersize=8, markeredgewidth=1,
-                    label=format_method_label(mk[0], mk[1]))
+            marker = method_to_marker.get(mk, "o")
+            ax.plot(
+                r["hpo_search_best"],
+                r["mean_final"],
+                marker=marker,
+                color=color,
+                linestyle="None",
+                markersize=8,
+                markeredgewidth=1,
+                label=format_method_label(mk[0], mk[1]),
+            )
 
         # y=x reference
         xmin = float(min(g["hpo_search_best"].min(), g["mean_final"].min()))
@@ -468,29 +594,61 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
 
         lines = [
             f"Pearson r = {pearson:.3f}" if np.isfinite(pearson) else "Pearson r = n/a",
-            f"Spearman ρ = {spearman:.3f}" if np.isfinite(spearman) else "Spearman ρ = n/a",
+            f"Spearman ρ = {spearman:.3f}"
+            if np.isfinite(spearman)
+            else "Spearman ρ = n/a",
             f"Δ Acc (Final Mean − HPO): {delta_mean:.3f} ± {delta_std:.3f}",
             f"Mean Rank Shift: {avg_rank_shift:.2f}",
         ]
         txt = "\n".join(lines)
 
         # Legend with same method order
-        present = {(r["optimizer_x"], None if (r["zcp_method"] is None or (isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"]))) else r["zcp_method"]) for _, r in g.iterrows()}
+        present = {
+            (
+                r["optimizer_x"],
+                None
+                if (
+                    r["zcp_method"] is None
+                    or (
+                        isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"])
+                    )
+                )
+                else r["zcp_method"],
+            )
+            for _, r in g.iterrows()
+        }
         handles = [
-            Line2D([0],[0], marker=method_to_marker[m], color=method_to_color[m],
-                   linestyle="None", markersize=8, label=format_method_label(m[0], m[1]))
-            for m in method_list if m in present
+            Line2D(
+                [0],
+                [0],
+                marker=method_to_marker[m],
+                color=method_to_color[m],
+                linestyle="None",
+                markersize=8,
+                label=format_method_label(m[0], m[1]),
+            )
+            for m in method_list
+            if m in present
         ]
         leg = ax.legend(handles=handles, loc="lower right")
 
         # ---- place annotation either above legend or at bottom-left ----
         if annot_pos == "bottom_left":
             ax.text(
-                0.02, 0.02, txt,
+                0.02,
+                0.02,
+                txt,
                 transform=ax.transAxes,
-                va="bottom", ha="left",
+                va="bottom",
+                ha="left",
                 fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="gray", linewidth=0.5),
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    facecolor="white",
+                    alpha=0.85,
+                    edgecolor="gray",
+                    linewidth=0.5,
+                ),
             )
         else:
             # above_legend
@@ -501,11 +659,20 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
             x = min(bbox_ax.x1, 0.98)
             y = min(bbox_ax.y1 + 0.02, 0.98)
             ax.text(
-                x, y, txt,
+                x,
+                y,
+                txt,
                 transform=ax.transAxes,
-                va="bottom", ha="right",
+                va="bottom",
+                ha="right",
                 fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="gray", linewidth=0.5),
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    facecolor="white",
+                    alpha=0.85,
+                    edgecolor="gray",
+                    linewidth=0.5,
+                ),
             )
 
         # Axis style
@@ -525,14 +692,28 @@ def make_search_to_eval_transfer(metas, studies, out_dir, final_root_dir=None, a
         plt.close()
         print(f"Saved {out_png}")
 
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db_dir", default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases", help="Folder with *.db from your HPO runs (WHPO_Databases)")
-    ap.add_argument("--out_dir", default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/hpo")
+    ap.add_argument(
+        "--db_dir",
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases",
+        help="Folder with *.db from your HPO runs (WHPO_Databases)",
+    )
+    ap.add_argument(
+        "--out_dir",
+        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/hpo",
+    )
     ap.add_argument("--search_space", default="nasbench201")
-    ap.add_argument("--final_root_dir", default="naslib/optimizers/oneshot/gsparsity/result_final_hp", help="Root dir of final runs (errors.json tree) to build Search→Eval transfer")
+    ap.add_argument(
+        "--final_root_dir",
+        default="naslib/optimizers/oneshot/gsparsity/result_final_hp",
+        help="Root dir of final runs (errors.json tree) to build Search→Eval transfer",
+    )
     # NEW: where to place the annotation
-    ap.add_argument("--annot_pos", choices=["above_legend", "bottom_left"], default="above_legend")
+    ap.add_argument(
+        "--annot_pos", choices=["above_legend", "bottom_left"], default="above_legend"
+    )
     args = ap.parse_args()
 
     metas, studies = load_studies(args.db_dir, args.search_space)
@@ -542,7 +723,14 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     make_fixed_time_reports(metas, studies, args.out_dir)
-    make_search_to_eval_transfer(metas, studies, args.out_dir, final_root_dir=args.final_root_dir, annot_pos=args.annot_pos)
+    make_search_to_eval_transfer(
+        metas,
+        studies,
+        args.out_dir,
+        final_root_dir=args.final_root_dir,
+        annot_pos=args.annot_pos,
+    )
+
 
 if __name__ == "__main__":
     main()

@@ -452,16 +452,39 @@ class Trainer(object):
                     if trial:
                         # Set a flag to indicate this was an internal early stop
                         trial.set_user_attr("internal_early_stopped", True)
-                        # Use val_loss for early stopping criterion, but report val_top1.avg for the objective
-                        trial.report(self.val_top1.avg, e + 1)
+                        # Default: SVA
+                        obj_value = float(self.val_top1.avg)
+
+                        # If requested, report QVA when available
+                        try:
+                            if (
+                                getattr(self.config.search, "hpo_objective", "sva")
+                                == "qva"
+                            ):
+                                qva = self.search_trajectory.queried_val_acc
+                                if qva and len(qva) > 0 and np.isfinite(qva[-1]):
+                                    obj_value = float(qva[-1])
+                        except Exception:
+                            pass
+
+                        trial.report(obj_value, e + 1)  # epochs are 0-indexed
                     break
 
             # Report to Optuna and check for pruning
             if trial:
-                # Report at the end of every epoch. This is crucial for the DEHB pruner.
-                trial.report(
-                    self.val_top1.avg, e + 1
-                )  # e + 1 because epochs are 0-indexed
+                # Default: SVA
+                obj_value = float(self.val_top1.avg)
+
+                # If requested, report QVA when available
+                try:
+                    if getattr(self.config.search, "hpo_objective", "sva") == "qva":
+                        qva = self.search_trajectory.queried_val_acc
+                        if qva and len(qva) > 0 and np.isfinite(qva[-1]):
+                            obj_value = float(qva[-1])
+                except Exception:
+                    pass
+
+                trial.report(obj_value, e + 1)  # epochs are 0-indexed
                 if trial.should_prune():
                     self.optimizer.after_training()
                     raise optuna.TrialPruned()

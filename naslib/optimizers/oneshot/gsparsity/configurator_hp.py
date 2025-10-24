@@ -324,6 +324,7 @@ optimizer_configs = {
             # "loss_criteria": "CrossEntropyLoss",
             "cutout": False,
             "cutout_length": 16,
+            "cutout_prob": 1.0,
             "drop_path_prob": 0.3,
             "grad_clip": 5.0,
             "learning_rate": 0.025,

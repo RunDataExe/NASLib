@@ -12,6 +12,8 @@ import optuna
 from optuna.trial import TrialState, FrozenTrial
 import urllib.parse
 import logging
+import shutil
+import sqlite3
 
 # -------------------------
 # Configuration/constants
@@ -78,6 +80,16 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Extra logging.",
+    )
+    p.add_argument(
+        "--fast-prune",
+        action="store_true",
+        help="Much faster: copy the .db and prune non-permitted trials via raw SQLite (no per-trial re-insert).",
+    )
+    p.add_argument(
+        "--slim-copy",
+        action="store_true",
+        help="When not using --fast-prune, speed up by omitting intermediate/system/user attrs in the filtered DB.",
     )
     return p.parse_args()
 
@@ -475,7 +487,12 @@ def _trials_fit_within_budget(per_trial_runtime: List[float], budget_s: float) -
 
 
 def filter_and_copy_study_by_timeout(
-    db_path: str, results_root: Optional[str], timeout_s: float
+    db_path: str,
+    results_root: Optional[str],
+    timeout_s: float,
+    *,
+    fast_prune: bool = False,
+    slim_copy: bool = False,
 ) -> Optional[str]:
     """
     Copy the study including only COMPLETE/PRUNED trials whose cumulative runtime fits timeout_s.
@@ -522,6 +539,29 @@ def filter_and_copy_study_by_timeout(
     if os.path.exists(filtered_db_path):
         os.remove(filtered_db_path)
 
+    if fast_prune:
+        # Fast path: copy file and delete everything not in permitted
+        try:
+            _fast_copy_and_prune_sqlite(
+                src=db_path,
+                dst=filtered_db_path,
+                keep_trial_numbers=[t.number for t in permitted],
+                new_study_name=f"{orig_name}-filtered",
+            )
+            logging.info(
+                f"Created filtered study '{orig_name}-filtered' (fast-prune) with {len(permitted)} trials at {filtered_db_path}"
+            )
+            return filtered_db_path
+        except Exception as e:
+            logging.warning(
+                f"Fast prune failed for {orig_name}: {e}. Falling back to API copy."
+            )
+            if os.path.exists(filtered_db_path):
+                try:
+                    os.remove(filtered_db_path)
+                except Exception:
+                    pass
+
     filtered_storage = f"sqlite:///{filtered_db_path}"
     filtered_study_name = f"{orig_name}-filtered"
 
@@ -532,15 +572,16 @@ def filter_and_copy_study_by_timeout(
     )
 
     for t in permitted:
+        # Slim copy optionally skips heavy blobs for speed
         filtered_study.add_trial(
             optuna.trial.create_trial(
                 state=t.state,
                 value=t.value if t.state == TrialState.COMPLETE else None,
                 params=t.params,
                 distributions=t.distributions,
-                user_attrs=t.user_attrs,
-                system_attrs=t.system_attrs,
-                intermediate_values=t.intermediate_values,
+                user_attrs=({} if slim_copy else t.user_attrs),
+                system_attrs=({} if slim_copy else t.system_attrs),
+                intermediate_values=({} if slim_copy else t.intermediate_values),
             )
         )
 
@@ -550,9 +591,86 @@ def filter_and_copy_study_by_timeout(
     return filtered_db_path
 
 
-# -------------------------
-# Main logic
-# -------------------------
+def _fast_copy_and_prune_sqlite(
+    src: str, dst: str, keep_trial_numbers: List[int], new_study_name: str
+) -> None:
+    """
+    Fast path: copy the SQLite DB file, then prune rows NOT in keep_trial_numbers
+    across trials and all child tables that have a trial_id column.
+    Also rename the study to `new_study_name`.
+    """
+    if not keep_trial_numbers:
+        raise ValueError("keep_trial_numbers must be non-empty.")
+
+    shutil.copy2(src, dst)
+    conn = sqlite3.connect(dst)
+    try:
+        cur = conn.cursor()
+        # Speed-focused pragmas (unsafe if power loss occurs; acceptable for offline filtering)
+        cur.execute("PRAGMA journal_mode=OFF;")
+        cur.execute("PRAGMA synchronous=OFF;")
+        cur.execute("PRAGMA temp_store=MEMORY;")
+        cur.execute("PRAGMA mmap_size=300000000;")
+        cur.execute("PRAGMA cache_size=-200000;")
+        cur.execute("PRAGMA foreign_keys=OFF;")
+        conn.commit()
+
+        cur.execute("BEGIN IMMEDIATE;")
+
+        # Map trial number -> trial_id
+        cur.execute("SELECT trial_id, number FROM trials;")
+        rows = cur.fetchall()
+        num2id: Dict[int, int] = {num: tid for (tid, num) in rows}
+        keep_ids = [num2id[n] for n in keep_trial_numbers if n in num2id]
+        if not keep_ids:
+            raise RuntimeError("No matching trial_ids found to keep.")
+
+        # Use a temp table to avoid SQLite parameter limits
+        cur.execute("DROP TABLE IF EXISTS _keep_ids;")
+        cur.execute("CREATE TEMP TABLE _keep_ids(id INTEGER PRIMARY KEY);")
+        cur.executemany(
+            "INSERT INTO _keep_ids(id) VALUES (?);", [(i,) for i in keep_ids]
+        )
+
+        # Discover all tables that have a 'trial_id' column
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [r[0] for r in cur.fetchall()]
+        trial_child_tables: List[str] = []
+        for t in tables:
+            # skip sqlite internal and studies/trials
+            if t.startswith("sqlite_") or t in ("studies", "trials"):
+                continue
+            try:
+                cur.execute(f"PRAGMA table_info({t});")
+                cols = [c[1] for c in cur.fetchall()]
+            except sqlite3.DatabaseError:
+                continue
+            if "trial_id" in cols:
+                trial_child_tables.append(t)
+
+        # Delete rows not in keep set from child tables
+        for t in trial_child_tables:
+            cur.execute(
+                f"DELETE FROM {t} WHERE trial_id NOT IN (SELECT id FROM _keep_ids);"
+            )
+
+        # Delete from trials table
+        cur.execute(
+            "DELETE FROM trials WHERE trial_id NOT IN (SELECT id FROM _keep_ids);"
+        )
+
+        # Rename the study to match our filtered file convention
+        cur.execute("UPDATE studies SET study_name = ?;", (new_study_name,))
+
+        cur.execute("COMMIT;")
+        # Reclaim space
+        cur.execute("VACUUM;")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ...existing code...
 
 
 def main():
@@ -621,9 +739,45 @@ def main():
                 f"No arch scoring duration for dataset '{dataset}'. Using 0s shift."
             )
 
+        # NEW: verbose group stats before filtering
+        non_pre_metas = [m for m in metas if m.optimizer not in ZCP_PRE_METHODS]
+        tref_pool = non_pre_metas if non_pre_metas else metas
+        tref_provider = max(tref_pool, key=lambda m: m.cumulative_runtime_s)
+        present_total = sum(m.finished_cleaned for m in metas)
+        present_non_pre = sum(m.finished_cleaned for m in non_pre_metas)
+        present_pre = present_total - present_non_pre
+
         print(
             f"- Group ({search_space}, {dataset}, seed={seed}) | budget={int(T_ref)}s [{ref_note}] | zcp-pre shift={int(offset_sec)}s"
         )
+        if args.verbose:
+            print(
+                f"    present runs: total={present_total} | non-pre={present_non_pre} across {len(non_pre_metas)} studies | pre={present_pre} across {len(metas) - len(non_pre_metas)} studies"
+            )
+            print(
+                f"    T_ref provider: {tref_provider.study_name} (cum={int(tref_provider.cumulative_runtime_s)}s, runs={tref_provider.finished_cleaned})"
+            )
+            # NEW: show what the other runs had before ref (their cumulative runtimes)
+            candidates = sorted(
+                non_pre_metas if non_pre_metas else metas,
+                key=lambda m: m.cumulative_runtime_s,
+                reverse=True,
+            )
+            print("    candidates for T_ref (non-pre if available):")
+            for c in candidates:
+                print(
+                    f"        - {c.study_name} [{c.optimizer}] cum={int(c.cumulative_runtime_s)}s runs={c.finished_cleaned}"
+                )
+            # Also list all studies in the group for context
+            all_studies = sorted(
+                metas, key=lambda m: m.cumulative_runtime_s, reverse=True
+            )
+            print("    all studies cumulative runtimes:")
+            for c in all_studies:
+                tag = "PRE" if c.optimizer in ZCP_PRE_METHODS else "NON-PRE"
+                print(
+                    f"        - {c.study_name} [{c.optimizer} | {tag}] cum={int(c.cumulative_runtime_s)}s runs={c.finished_cleaned}"
+                )
 
         for m in metas:
             if m.optimizer in ZCP_PRE_METHODS:
@@ -643,7 +797,11 @@ def main():
                 continue
 
             out_path = filter_and_copy_study_by_timeout(
-                m.db_path, args.results_root, effective_budget
+                m.db_path,
+                args.results_root,
+                effective_budget,
+                fast_prune=args.fast_prune,
+                slim_copy=args.slim_copy,
             )
             print(
                 f"    {m.study_name} [{m.optimizer}] :: {status} :: out={os.path.basename(out_path) if out_path else 'SKIPPED'}"

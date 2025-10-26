@@ -138,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--out-scripts-dir",
-        default="naslib/optimizers/oneshot/gsparsity/submission_scripts/final_hp_setting_runs",
+        default="naslib/optimizers/oneshot/gsparsity/submission_scripts/final_hp_setting_runs_queried_val_acc",
         help="Directory to write Slurm scripts into (subfolders per optimizer are created).",
     )
     p.add_argument(

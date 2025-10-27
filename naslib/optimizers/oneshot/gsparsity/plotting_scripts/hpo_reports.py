@@ -3,6 +3,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import optuna
+from optuna.trial import TrialState
 
 # Matplotlib to match your house style
 import matplotlib.pyplot as plt
@@ -13,6 +14,20 @@ from matplotlib.lines import Line2D
 # add: known search spaces from NASLib
 from naslib.search_spaces import supported_search_spaces
 
+# Known ZCP method names
+ZCP_METHODS = {
+    "synflow",
+    "grad_norm",
+    "fisher",
+    "grasp",
+    "jacov",
+    "snip",
+    "nwot",
+    "epe_nas",
+    "zen",
+    "flops",
+    "params",
+}
 # ---- Style copied to align with your other scripts ----
 DEFAULTS = [
     (0.5490196078431373, 0.19215686274509805, 1.0),
@@ -33,6 +48,61 @@ MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
 
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
+
+
+def parse_study_identity(study_name: str):
+    """
+    Returns: optimizer, search_space, dataset, seed, zcp_method|None
+    Robust parsing (handles '-filtered'/'_filtered' suffix, hyphenated datasets).
+    """
+    # strip filtered suffix variants if present
+    name = study_name
+    for suf in ("-filtered", "_filtered"):
+        if name.endswith(suf):
+            name = name[: -len(suf)]
+            break
+
+    parts = name.split("-")
+    if len(parts) < 4:
+        raise ValueError(f"Unexpected study name format: {study_name}")
+
+    # Strip trailing tokens until we see a known ZCP method or an int seed
+    while parts:
+        tail = parts[-1]
+        if tail in ZCP_METHODS:
+            break
+        try:
+            int(tail)
+            break
+        except ValueError:
+            parts.pop()
+    if len(parts) < 4:
+        raise ValueError(f"Unexpected study name after suffix stripping: {study_name}")
+
+    zcp_method = None
+    if parts[-1] in ZCP_METHODS:
+        zcp_method = parts.pop()
+
+    seed_s = parts.pop()
+    try:
+        seed = int(seed_s)
+    except ValueError as e:
+        raise ValueError(f"Seed in study name is not an int: {study_name}") from e
+
+    SEARCH_SPACES = set(supported_search_spaces.keys())
+    try:
+        ss_idx = max(i for i, t in enumerate(parts) if t in SEARCH_SPACES)
+    except ValueError as e:
+        raise ValueError(f"Search space token not found in: {study_name}") from e
+
+    search_space = parts[ss_idx]
+    optimizer = "-".join(parts[:ss_idx]).strip("-")
+    dataset = "-".join(parts[ss_idx + 1 :]).strip("-")
+
+    if not optimizer or not dataset:
+        raise ValueError(f"Could not parse optimizer/dataset from: {study_name}")
+
+    return optimizer, search_space, dataset, seed, zcp_method
 
 
 def _sort_key_method(m):
@@ -57,11 +127,14 @@ def canonical_optimizer_name(opt: str) -> str:
     Canonicalize optimizer names for merging with final runs.
     Do not change labels used for plotting; only use this for joins.
     """
-    if "zcp_gsparsity" in opt:
+    opt = str(opt)
+    if opt.startswith("zcp-pre_zcp_gsparsity"):
+        return "zcp-pre_zcp_gsparsity"
+    if opt.startswith("zcp_gsparsity"):
         return "zcp_gsparsity"
-    if "gsparsity" in opt and "zcp" not in opt:
+    if opt.startswith("gsparsity"):
         return "gsparsity"
-    if "darts" in opt:
+    if opt.startswith("darts"):
         return "darts"
     return opt
 
@@ -158,6 +231,53 @@ def trial_best_value(trial: optuna.trial.FrozenTrial):
     return None
 
 
+def _trial_score_highest_val_acc(t: optuna.trial.FrozenTrial):
+    # identical to generator: COMPLETE -> value; PRUNED -> last intermediate
+    if t.state == TrialState.COMPLETE:
+        return t.value
+    if t.state == TrialState.PRUNED:
+        if t.last_step is not None and t.last_step in t.intermediate_values:
+            return t.intermediate_values[t.last_step]
+        if t.intermediate_values:
+            last_step = max(t.intermediate_values.keys())
+            return t.intermediate_values[last_step]
+    return None
+
+
+def select_best_trial_highest_val_acc(
+    study: optuna.study.Study,
+) -> optuna.trial.FrozenTrial:
+    """
+    Match generator tie-break:
+      - exclude user_attrs['internal_early_stopped'] == True
+      - choose highest score (COMPLETE value or PRUNED last intermediate)
+      - if tie, keep the first seen (lowest trial number)
+    """
+    trials = study.get_trials(
+        deepcopy=False, states=[TrialState.COMPLETE, TrialState.PRUNED]
+    )
+    candidates = [
+        t for t in trials if not t.user_attrs.get("internal_early_stopped", False)
+    ]
+    if not candidates:
+        raise ValueError("No eligible trials.")
+    best = None
+    best_score = None
+    for t in (
+        candidates
+    ):  # Optuna returns trials ordered by number -> “first” = lowest number
+        s = _trial_score_highest_val_acc(t)
+        if s is None:
+            continue
+        if best_score is None or s > best_score:
+            best = t
+            best_score = s
+        # equal scores -> keep existing 'best' (earlier trial)
+    if best is None:
+        raise ValueError("No comparable scores.")
+    return best
+
+
 def best_over_time(trials):
     # Staircase incumbent vs wall-clock seconds (trial completion)
     starts = [t.datetime_start for t in trials if t.datetime_start]
@@ -214,21 +334,51 @@ def load_studies(db_dir, search_space_filter=None):
     dbs = sorted(glob.glob(os.path.join(db_dir, "*.db")))
     metas, studies = [], []
     for db in dbs:
+        storage = f"sqlite:///{db}"
         try:
-            meta = parse_meta(db)
-        except Exception as e:
-            print(f"Skip {db}: cannot parse filename ({e})")
-            continue
-        if search_space_filter and meta["search_space"] != search_space_filter:
-            continue
-        try:
-            st = optuna.load_study(
-                storage=f"sqlite:///{db}", study_name=meta["study_name"]
-            )
+            summaries = optuna.study.get_all_study_summaries(storage)
         except Exception as e:
             print(f"Skip {db}: {e}")
             continue
-        metas.append(meta)
+        if not summaries:
+            print(f"Skip {db}: no studies found")
+            continue
+
+        base = os.path.basename(db).replace(".db", "")
+        # Prefer a study whose name matches the filename, else a '-filtered' variant, else the first one
+        ss = next((s for s in summaries if s.study_name == base), None)
+        if ss is None:
+            alt = base.replace("_filtered", "-filtered")
+            ss = next((s for s in summaries if s.study_name == alt), None)
+        if ss is None:
+            ss = summaries[0]
+
+        study_name = ss.study_name
+
+        try:
+            opt, ss_name, ds, sd, zcp = parse_study_identity(study_name)
+        except Exception as e:
+            print(f"Skip {db}: cannot parse study name ({study_name}): {e}")
+            continue
+        if search_space_filter and ss_name != search_space_filter:
+            continue
+
+        try:
+            st = optuna.load_study(storage=storage, study_name=study_name)
+        except Exception as e:
+            print(f"Skip {db}: {e}")
+            continue
+
+        metas.append(
+            dict(
+                optimizer=opt,
+                search_space=ss_name,
+                dataset=ds,
+                seed=str(sd),
+                zcp_method=zcp,
+                study_name=study_name,
+            )
+        )
         studies.append(st)
     return metas, studies
 
@@ -419,7 +569,7 @@ def make_fixed_time_reports(metas, studies, out_dir):
                 markeredgewidth=1,
             )
 
-        ax.set_xlabel("Wallclock Time (s) [Linear Scale]")
+        ax.set_xlabel("Runtime Time (s) [Linear Scale]")
         ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
             f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -464,53 +614,67 @@ def make_fixed_time_reports(metas, studies, out_dir):
 def make_search_to_eval_transfer(
     metas, studies, out_dir, final_root_dir=None, annot_pos="above_legend"
 ):
-    # Build HPO best per dataset/method from Optuna (highest acc over all trials, all states)
-    best_rows = []
+    # 1) Select best trial per study using generator logic
+    rows = []
     for meta, st in zip(metas, studies):
-        vals = []
-        for t in st.trials:
-            v = trial_best_value(t)
-            if v is not None:
-                vals.append(v)
-        if not vals:
+        try:
+            bt = select_best_trial_highest_val_acc(st)
+        except Exception:
             continue
-        best_rows.append(
+        s = _trial_score_highest_val_acc(bt)
+        if s is None:
+            continue
+        rows.append(
             dict(
                 dataset=meta["dataset"],
                 optimizer=meta["optimizer"],
                 zcp_method=meta["zcp_method"],
-                hpo_search_best=float(np.max(vals)),
+                study_name=meta["study_name"],
+                best_trial_number=bt.number,
+                hpo_search_best=float(s),
             )
         )
-    if not best_rows:
+    if not rows:
         print("No HPO best values.")
         return
-    hpo_df = (
-        pd.DataFrame(best_rows)
-        .groupby(["dataset", "optimizer", "zcp_method"], dropna=False, as_index=False)[
-            "hpo_search_best"
-        ]
-        .max()
+    hpo_df = pd.DataFrame(rows)
+
+    # 2) Collapse to a single row per (dataset, canonical optimizer, zcp_method)
+    SENT = "__NOZCP__"
+    hpo_df["zcp_method"] = hpo_df["zcp_method"].fillna(SENT)
+    hpo_df["merge_opt"] = hpo_df["optimizer"].apply(canonical_optimizer_name)
+
+    # sort for deterministic tie-break:
+    # - highest score first
+    # - lowest trial number next (first that reached it)
+    # - then by study_name for stability
+    hpo_df = hpo_df.sort_values(
+        [
+            "dataset",
+            "zcp_method",
+            "merge_opt",
+            "hpo_search_best",
+            "best_trial_number",
+            "study_name",
+        ],
+        ascending=[True, True, True, False, True, True],
+    )
+    hpo_one = hpo_df.drop_duplicates(
+        subset=["dataset", "merge_opt", "zcp_method"], keep="first"
     )
 
-    # Load final runs from errors.json tree (no CSVs)
+    # 3) Final runs
     final_df = load_final_runs(final_root_dir)
     if final_df is None:
         print("Skipping Search→Eval transfer (no final runs found).")
         return
-
-    # Normalize None for merge and canonicalize optimizer names for join
-    hpo_m = hpo_df.copy()
     fin_m = final_df.copy()
-    SENT = "__NOZCP__"
-    hpo_m["zcp_method"] = hpo_m["zcp_method"].fillna(SENT)
     fin_m["zcp_method"] = fin_m["zcp_method"].fillna(SENT)
-
-    hpo_m["merge_opt"] = hpo_m["optimizer"].apply(canonical_optimizer_name)
     fin_m["merge_opt"] = fin_m["optimizer"].apply(canonical_optimizer_name)
 
+    # 4) Merge by canonical key
     m = pd.merge(
-        hpo_m,
+        hpo_one,
         fin_m,
         left_on=["dataset", "merge_opt", "zcp_method"],
         right_on=["dataset", "merge_opt", "zcp_method"],
@@ -522,11 +686,10 @@ def make_search_to_eval_transfer(
         )
         return
 
-    # restore None for reporting/labels
+    # restore None
     m["zcp_method"] = m["zcp_method"].replace(SENT, np.nan)
 
     m["delta_final_minus_hpo"] = m["mean_final"] - m["hpo_search_best"]
-    # Ranks per dataset
     m["rank_by_hpo"] = m.groupby("dataset")["hpo_search_best"].rank(
         ascending=False, method="min"
     )
@@ -557,7 +720,7 @@ def make_search_to_eval_transfer(
                 )
                 else r["zcp_method"]
             )
-            mk = (r["optimizer_x"], zcp)
+            mk = (r["optimizer_x"] if "optimizer_x" in r else r["optimizer"], zcp)
             color = method_to_color.get(mk, COLORS[0])
             marker = method_to_marker.get(mk, "o")
             ax.plot(

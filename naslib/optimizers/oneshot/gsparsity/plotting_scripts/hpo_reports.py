@@ -793,7 +793,7 @@ def make_search_to_eval_transfer(
             for m in method_list
             if m in present
         ]
-        leg = ax.legend(handles=handles, loc="lower right")
+        leg = ax.legend(handles=handles, loc="lower left")
 
         # ---- place annotation either above legend or at bottom-left ----
         if annot_pos == "bottom_left":

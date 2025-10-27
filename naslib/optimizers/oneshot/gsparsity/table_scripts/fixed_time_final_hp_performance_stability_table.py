@@ -10,6 +10,9 @@ import pandas as pd
 
 # Extra time budget for Random Search (in seconds)
 EXTRA_T_RANDOM_SEARCH = 48 * 3600  # 48 hours
+# Tiny epsilon to nudge T so boundary points are included by <= T
+EPS_REL = 1e-9
+EPS_ABS = 1e-6
 
 
 def latex_escape(text: Optional[str]) -> str:
@@ -559,20 +562,26 @@ def main() -> None:
         print("No valid runs found.", file=sys.stderr)
         return
 
-    # Determine T per dataset: minimum of last time across all runs in that dataset
+    # Determine T per dataset: maximum common time so that all runs have at least one point
+    # T_base = max(max first time, min last time); T = T_base + eps
     times_by_dataset: Dict[str, float] = {}
+    coverage_debug: Dict[str, Tuple[float, float]] = {}
     for dataset in sorted({r["dataset"] for r in runs}):
-        last_times = [
-            float(r["times"][-1])
-            for r in runs
-            if r["dataset"] == dataset and r["times"].size > 0
-        ]
-        if not last_times:
+        ds_runs = [r for r in runs if r["dataset"] == dataset and r["times"].size > 0]
+        if not ds_runs:
             continue
-        T = float(np.min(last_times))
-        if T <= 0:
+        first_times = [float(r["times"][0]) for r in ds_runs]
+        last_times = [float(r["times"][-1]) for r in ds_runs]
+        T_start = float(np.max(first_times))  # latest first observation across runs
+        T_end = float(np.min(last_times))  # earliest end across runs
+        # Choose the max of the two to guarantee at least one point per run
+        T_base = max(T_start, T_end)
+        if T_base <= 0:
             continue
+        eps = max(EPS_ABS, EPS_REL * T_base)
+        T = T_base + eps
         times_by_dataset[dataset] = T
+        coverage_debug[dataset] = (T_start, T_end)
 
     if not times_by_dataset:
         print("Could not determine common time T for any dataset.", file=sys.stderr)
@@ -665,9 +674,13 @@ def main() -> None:
     )
     write_latex_table(df, latex_output, args.fractional, times_by_dataset)
 
-    # Console hint for chosen T per dataset
+    # Console hint for chosen T per dataset and coverage
     for ds, T in sorted(times_by_dataset.items()):
-        print(f"[INFO] Dataset '{ds}': chosen common time T = {T:.2f} s")
+        T_start, T_end = coverage_debug.get(ds, (float("nan"), float("nan")))
+        print(
+            f"[INFO] Dataset '{ds}': chosen common time T = {T:.6f} s "
+            f"(latest first = {T_start:.6f} s, earliest end = {T_end:.6f} s)"
+        )
 
 
 if __name__ == "__main__":

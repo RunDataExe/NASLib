@@ -569,7 +569,7 @@ def make_fixed_time_reports(metas, studies, out_dir):
                 markeredgewidth=1,
             )
 
-        ax.set_xlabel("Runtime Time (s) [Linear Scale]")
+        ax.set_xlabel("Runtime (s) [Linear Scale]")
         ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
             f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"

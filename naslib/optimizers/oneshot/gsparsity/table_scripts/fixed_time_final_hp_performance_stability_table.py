@@ -199,22 +199,17 @@ def incumbent_curve_up_to_T(
     times: np.ndarray, acc: np.ndarray, T: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Build incumbent staircase up to time T (inclusive).
+    Build incumbent staircase up to time T (inclusive) and hold last value constant to T.
     Returns xs, ys where ys is non-decreasing max-so-far at xs.
     """
     mask = times <= T
     if not np.any(mask):
-        # No point before T; return a degenerate at t=0
         return np.array([0.0, T]), np.array([0.0, 0.0])
 
     xs = times[mask]
     ys = np.maximum.accumulate(acc[mask])
-    # prepend (0, 0.0) to avoid area before first observation
-    xs_full = np.concatenate([[0.0], xs])
-    ys_full = np.concatenate([[0.0], ys])
-    # append (T, last_y) to close the interval
-    xs_full = np.concatenate([xs_full, [T]])
-    ys_full = np.concatenate([ys_full, [ys[-1]]])
+    xs_full = np.concatenate([[0.0], xs, [T]])
+    ys_full = np.concatenate([[0.0], ys, [ys[-1]]])  # constant after last
     return xs_full, ys_full
 
 
@@ -307,85 +302,73 @@ def _eval_piecewise_linear(
     times: np.ndarray, values: np.ndarray, t_eval: np.ndarray
 ) -> np.ndarray:
     """
-    Evaluate a piecewise-linear curve at t_eval using linear interpolation and linear
-    extrapolation outside [times[0], times[-1]] based on first/last segment slopes.
+    Evaluate a piecewise-linear curve at t_eval using linear interpolation inside
+    and constant extrapolation outside [times[0], times[-1]] (hold first/last values).
     """
     n = times.size
     if n == 0:
         return np.full_like(t_eval, np.nan, dtype=float)
     if n == 1:
         return np.full_like(t_eval, float(values[0]), dtype=float)
-
-    y = np.interp(
-        t_eval, times, values
-    )  # linear interp within bounds, constant outside
-    slopes = _segment_slopes(times, values)
-
-    left_mask = t_eval < times[0]
-    if np.any(left_mask):
-        a0 = float(slopes[0])
-        y[left_mask] = values[0] + a0 * (t_eval[left_mask] - times[0])
-
-    right_mask = t_eval > times[-1]
-    if np.any(right_mask):
-        aL = float(slopes[-1])
-        y[right_mask] = values[-1] + aL * (t_eval[right_mask] - times[-1])
-
-    return y
+    # linear interpolation; constant outside
+    return np.interp(
+        t_eval, times, values, left=float(values[0]), right=float(values[-1])
+    )
 
 
 def band_area_over_T(seeds: List[Dict[str, np.ndarray]], key: str, T: float) -> float:
     """
-    Compute the average band width (1/T * integral_0^T [max_seed f_s(t) - min_seed f_s(t)] dt)
-    where each seed curve f_s(t) is built by connecting its datapoints in natural order
-    with straight lines and extrapolating linearly to t=0 (and to T if needed).
-
-    seeds: list of dicts containing 'times' and the accuracy key ('train' or 'valid'), in fractional units.
-    key: 'train' or 'valid'
-    T: common horizon (seconds). Returns value in same units as accuracy (fractional).
+    Compute average band width (1/T' * ∫_{t0}^{T} [max f_s(t) - min f_s(t)] dt)
+    where t0 = max first timestamp across seeds clipped to T. Curves are linearly
+    interpolated between observed points and held constant outside their range.
+    T' = (T - t0); returns value in same units as accuracy (fractional).
     """
     if T <= 0:
         return np.nan
     if not seeds:
         return np.nan
-    if len(seeds) == 1:
-        return 0.0
 
     # Prepare per-seed cleaned curves
     curves = []
+    firsts = []
     for s in seeds:
         t = np.asarray(s["times"], dtype=float)
         y = np.asarray(s[key], dtype=float)
-        # keep only finite and t within [0, inf)
         m = np.isfinite(t) & np.isfinite(y) & (t >= 0.0)
         t, y = t[m], y[m]
         t, y = _dedup_sorted_times(t, y)
         if t.size == 0:
             continue
         curves.append((t, y, _segment_slopes(t, y)))
-    if len(curves) <= 1:
+        firsts.append(float(t[0]))
+    if len(curves) == 0:
+        return np.nan
+    if len(curves) == 1:
         return 0.0
 
-    # Base grid: 0, T, and all seed timestamps clipped to [0, T]
-    grid = {0.0, float(T)}
+    # Start integration at latest first timestamp among seeds (clipped to T)
+    t0 = min(T, float(np.max(firsts)))
+    if not np.isfinite(t0) or t0 >= T:
+        return 0.0
+    Tprime = T - t0
+
+    # Base grid: t0, T, and all seed timestamps in [t0, T]
+    grid = {float(t0), float(T)}
     for t, _, _ in curves:
-        # include internal timestamps within [0, T]
-        t_clip = t[(t >= 0.0) & (t <= T)]
+        t_clip = t[(t >= t0) & (t <= T)]
         grid.update(map(float, t_clip.tolist()))
     g0 = np.array(sorted(grid), dtype=float)
     if g0.size < 2:
         return 0.0
 
-    # Add pairwise intersections of lines on each base interval to capture envelope switches
+    # Add pairwise intersections of lines on each base interval
     intersections = []
     for i in range(g0.size - 1):
         left, right = g0[i], g0[i + 1]
         if right - left <= 0.0:
             continue
         t_mid = 0.5 * (left + right)
-        # collect line coeffs (a, b) for each seed on this interval
         coeffs = [_line_coeff_on_interval(t, y, s, t_mid) for (t, y, s) in curves]
-        # check intersections for all pairs
         n = len(coeffs)
         for p in range(n):
             a1, b1 = coeffs[p]
@@ -397,21 +380,21 @@ def band_area_over_T(seeds: List[Dict[str, np.ndarray]], key: str, T: float) -> 
                 t_cross = (b2 - b1) / denom
                 if left < t_cross < right:
                     intersections.append(float(t_cross))
+    g = (
+        np.array(sorted(set(g0.tolist() + intersections)), dtype=float)
+        if intersections
+        else g0
+    )
 
-    if intersections:
-        g = np.array(sorted(set(g0.tolist() + intersections)), dtype=float)
-    else:
-        g = g0
-
-    # Evaluate all seeds on final grid and compute band height
+    # Evaluate all seeds with constant extrapolation outside their range
     Y = []
     for t, y, _ in curves:
         Y.append(_eval_piecewise_linear(t, y, g))
-    Y = np.vstack(Y)  # shape: (num_seeds, num_grid)
+    Y = np.vstack(Y)
     gap = np.nanmax(Y, axis=0) - np.nanmin(Y, axis=0)
 
     area = np.trapz(gap, g)
-    return float(area / T)
+    return float(area / Tprime)
 
 
 def write_output(df: pd.DataFrame, output_path: str) -> None:
@@ -512,11 +495,13 @@ def write_latex_table(
     # Caption mentions T per dataset (seconds)
     parts = [f"{ds}: T = {int(t)} s" for ds, t in sorted(times_by_dataset.items())]
     cap = (
-        "Fixed-time comparison at the maximum common budget T per dataset (for one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost). "
+        "Fixed-time comparison at the maximum common budget T per dataset "
+        "(T = max(latest first cumulative time, earliest end) + $\\epsilon$; "
+        "for one-shot methods cumulative search cost + final evaluation; for random search cumulative evaluation cost). "
         + "; ".join(parts)
         + ". Random Search uses T+48h only for Best@T; AUC is computed at the common T for all methods. "
-        + "Metrics are mean $\\pm$ std over three seeds. AUC is the incumbent mean accuracy over [0, T]. "
-        + "Mean Band Gap is the time-averaged gap (1/T * $\int$[0,T] (max-min) dt) between the best and worst seed curves over [0, T] (lower is more stable)."
+        + "Metrics are mean $\\pm$ std over three seeds. AUC uses an incumbent that is held constant after the last observation up to T. "
+        + "Mean Band Gap integrates from the latest first timestamp among seeds to T, with curves held constant outside their observed range."
     )
 
     lines.extend(

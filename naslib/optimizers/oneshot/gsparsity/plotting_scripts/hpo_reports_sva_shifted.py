@@ -239,14 +239,15 @@ def best_over_time(trials):
         events.append((x, v))
     if not events:
         return np.array([]), np.array([])
+
     events.sort()
-    xs, ys = [], []
+    xs, ys = [0.0], [0.0]  # ensure all curves start at 0 and ramp to first datapoint
     best = -np.inf
     for x, v in events:
         best = max(best, v)
-        xs.append(x)
-        ys.append(best)
-    return np.array(xs), np.array(ys)
+        xs.append(float(x))
+        ys.append(float(best))
+    return np.asarray(xs), np.asarray(ys)
 
 
 def incumbent_at(xs, ys, T):
@@ -385,13 +386,18 @@ def make_fixed_time_reports(metas, studies, out_dir, durations_map=None):
         if meta["optimizer"] in ZCP_PRE_METHODS:
             # per-dataset offset (if missing, treat as 0)
             offset = float(durations_map.get(meta["dataset"], 0.0))
-            xs = xs + offset
+
+            # Apply offset only to points after time 0, keep the start at 0
+            if offset > 0.0 and len(xs) >= 2:
+                xs = xs.copy()
+                xs[1:] = xs[1:] + offset
+
             # clip to group T_ref so zcp-pre "search" + offset doesn't exceed others' horizon
             tref = group_tref.get((meta["dataset"], meta["seed"]))
             if tref is not None:
                 mask = xs <= tref
-                if not np.any(mask):
-                    # No eligible points within cutoff -> drop this run from plotting
+                # Require at least one datapoint beyond t=0 to keep the run
+                if np.sum(mask) <= 1:
                     continue
                 xs = xs[mask]
                 ys = ys[mask]

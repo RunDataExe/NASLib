@@ -9,7 +9,11 @@ import numpy as np
 
 DATASETS = {"cifar10", "cifar100", "ImageNet16-120"}
 SECONDS_IN_48H = 48 * 60 * 60
-
+# NEW: methods that receive one-time shift
+ZCP_PRE_METHODS = {
+    "zcp-pre_gsparsity",
+    "zcp-pre_zcp_gsparsity",
+}
 # Keys to trim for random_search runs
 EPOCH_KEYS = [
     "train_acc",
@@ -29,7 +33,7 @@ EPOCH_KEYS = [
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Truncate random_search errors.json to a per-dataset budget derived from non-random_search max runtime + 48h."
+        description="Truncate random_search errors.json to a per-dataset budget derived from non-random_search max runtime + extra seconds."
     )
     p.add_argument(
         "--root_dir",
@@ -47,6 +51,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not create .bak backups when writing changes.",
     )
+    # NEW: durations for zcp-pre shift
+    p.add_argument(
+        "--durations_dir",
+        default="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
+        help="Directory containing arch_scores_duration_*.json files for zcp-pre shift.",
+    )
+    # NEW: random_search extra time controls
+    p.add_argument(
+        "--rs_extra_time",
+        type=float,
+        default=SECONDS_IN_48H,
+        help="Additional budget (in seconds) granted to random_search for all datasets unless overridden.",
+    )
+    p.add_argument(
+        "--rs_extra_time_override",
+        type=str,
+        nargs="*",
+        default=[],
+        help="Per-dataset overrides as DATASET=SECONDS (e.g., cifar10=7200 ImageNet16-120=14400).",
+    )
     return p.parse_args()
 
 
@@ -63,6 +87,11 @@ def infer_dataset_from_path(path: str) -> Optional[str]:
         if part in DATASETS:
             return part
     return None
+
+
+def get_method_from_path(path: str, root_dir: str) -> str:
+    rel = os.path.relpath(path, root_dir)
+    return rel.split(os.sep, 1)[0]
 
 
 def is_random_search(path: str, root_dir: str) -> bool:
@@ -83,10 +112,14 @@ def load_json(path: str) -> Optional[dict]:
 def compute_final_total_time(data: dict) -> Optional[float]:
     # Returns final cumulative time (search + final eval) following the same logic
     # used elsewhere in the project.
-    required = ["queried_train_acc", "queried_val_acc", "scaled_queried_train_time", "runtime"]
+    required = [
+        "queried_train_acc",
+        "queried_val_acc",
+        "scaled_queried_train_time",
+        "runtime",
+    ]
     if not all(k in data for k in required):
         return None
-
     try:
         train_acc = np.asarray(data["queried_train_acc"], dtype=float)
         valid_acc = np.asarray(data["queried_val_acc"], dtype=float)
@@ -95,7 +128,10 @@ def compute_final_total_time(data: dict) -> Optional[float]:
     except Exception:
         return None
 
-    if not (train_acc.size and train_acc.size == valid_acc.size == eval_time.size == runtime.size):
+    if not (
+        train_acc.size
+        and train_acc.size == valid_acc.size == eval_time.size == runtime.size
+    ):
         return None
 
     loss = np.asarray(data.get("train_loss", []), dtype=float)
@@ -130,7 +166,59 @@ def compute_final_total_time(data: dict) -> Optional[float]:
     return float(total_time[-1])
 
 
-def compute_dataset_budgets(root_dir: str) -> Dict[str, float]:
+def load_zcp_pre_durations(durations_dir: str) -> Dict[str, float]:
+    """
+    Load per-dataset one-time durations for zcp-pre methods from durations_dir.
+    Expects files named arch_scores_duration_<DATASET>.json with schema: {"duration": <float>}
+    """
+    durations: Dict[str, float] = {}
+    for ds in DATASETS:
+        fname = f"arch_scores_duration_{ds}.json"
+        fpath = os.path.join(durations_dir, fname)
+        data = load_json(fpath)
+        if data is None:
+            continue
+        try:
+            durations[ds] = float(data.get("duration", 0.0))
+        except Exception:
+            pass
+    return durations
+
+
+def parse_rs_extra_overrides(pairs: Iterable[str]) -> Dict[str, float]:
+    """
+    Parse strings like ['cifar10=7200', 'ImageNet16-120=14400'] into a dict.
+    """
+    out: Dict[str, float] = {}
+    for item in pairs or []:
+        if "=" not in item:
+            print(
+                f"[WARN] Invalid override '{item}', expected DATASET=SECONDS",
+                file=sys.stderr,
+            )
+            continue
+        ds, sec = item.split("=", 1)
+        ds = ds.strip()
+        try:
+            val = float(sec.strip())
+        except ValueError:
+            print(f"[WARN] Invalid seconds value in override '{item}'", file=sys.stderr)
+            continue
+        if ds not in DATASETS:
+            print(
+                f"[WARN] Unknown dataset '{ds}' in override '{item}'", file=sys.stderr
+            )
+            continue
+        out[ds] = val
+    return out
+
+
+def compute_dataset_budgets(
+    root_dir: str,
+    durations_map: Dict[str, float],
+    rs_extra_time_default: float,
+    rs_extra_time_overrides: Dict[str, float],
+) -> Dict[str, float]:
     # For each dataset, find max final cumulative time among non-random_search runs.
     max_times: Dict[str, float] = {ds: 0.0 for ds in DATASETS}
     for path in iter_error_files(root_dir):
@@ -148,15 +236,26 @@ def compute_dataset_budgets(root_dir: str) -> Dict[str, float]:
         if t is None or not np.isfinite(t):
             continue
 
+        # Apply one-time zcp-pre shift when applicable
+        method = get_method_from_path(path, root_dir)
+        if method in ZCP_PRE_METHODS:
+            offset = float(durations_map.get(str(ds), 0.0))
+            t = t + offset
+
         if t > max_times[ds]:
             max_times[ds] = t
 
-    # Budget = max_time + 48h
-    budgets = {ds: (max_times[ds] + SECONDS_IN_48H) for ds in DATASETS}
+    # Budget = max_time + extra random_search time (global default, with per-dataset overrides)
+    budgets = {
+        ds: (max_times[ds] + rs_extra_time_overrides.get(ds, rs_extra_time_default))
+        for ds in DATASETS
+    }
     return budgets
 
 
-def trim_random_search_file(path: str, budget: float, dry_run: bool, no_backup: bool) -> Tuple[int, int]:
+def trim_random_search_file(
+    path: str, budget: float, dry_run: bool, no_backup: bool
+) -> Tuple[int, int]:
     """
     Returns (kept, original_length). If file is unchanged, kept == original_length.
     """
@@ -166,7 +265,10 @@ def trim_random_search_file(path: str, budget: float, dry_run: bool, no_backup: 
 
     eval_time = np.asarray(data.get("scaled_queried_train_time", []), dtype=float)
     if eval_time.size == 0:
-        print(f"[WARN] No 'scaled_queried_train_time' in {path}; skipping.", file=sys.stderr)
+        print(
+            f"[WARN] No 'scaled_queried_train_time' in {path}; skipping.",
+            file=sys.stderr,
+        )
         return (0, 0)
 
     cum = np.cumsum(eval_time)
@@ -179,7 +281,9 @@ def trim_random_search_file(path: str, budget: float, dry_run: bool, no_backup: 
         return (n_orig, n_orig)
 
     if dry_run:
-        print(f"[DRY-RUN] Would trim {path}: keep {n_keep}/{n_orig} epochs (budget={budget:.2f}s)")
+        print(
+            f"[DRY-RUN] Would trim {path}: keep {n_keep}/{n_orig} epochs (budget={budget:.2f}s)"
+        )
         return (n_keep, n_orig)
 
     # Write changes
@@ -225,11 +329,23 @@ def main() -> None:
     args = parse_args()
     root = args.root_dir
 
+    # Load zcp-pre durations and rs extra-time overrides
+    durations_map = load_zcp_pre_durations(args.durations_dir)
+    rs_overrides = parse_rs_extra_overrides(args.rs_extra_time_override)
+
     # 1) Compute per-dataset budgets from non-random_search runs
-    budgets = compute_dataset_budgets(root)
+    budgets = compute_dataset_budgets(
+        root_dir=root,
+        durations_map=durations_map,
+        rs_extra_time_default=args.rs_extra_time,
+        rs_extra_time_overrides=rs_overrides,
+    )
     print("Per-dataset budgets (seconds):")
     for ds in sorted(budgets):
-        print(f"  {ds}: {budgets[ds]:.2f} (max non-RS + 48h)")
+        extra = rs_overrides.get(ds, args.rs_extra_time)
+        print(
+            f"  {ds}: {budgets[ds]:.2f} (max non-RS (+ zcp-pre shift if any) + extra RS={extra:.2f}s)"
+        )
 
     # 2) Apply truncation to random_search runs per dataset
     total_trimmed = 0
@@ -241,7 +357,9 @@ def main() -> None:
         if ds is None or ds not in budgets:
             continue
 
-        kept, orig = trim_random_search_file(path, budgets[ds], args.dry_run, args.no_backup)
+        kept, orig = trim_random_search_file(
+            path, budgets[ds], args.dry_run, args.no_backup
+        )
         if orig > 0:
             total_files += 1
             if kept < orig:

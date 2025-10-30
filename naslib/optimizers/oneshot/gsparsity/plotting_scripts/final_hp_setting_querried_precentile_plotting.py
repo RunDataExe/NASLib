@@ -330,6 +330,7 @@ def plot_final_accuracy_distribution(
         final_accs = []
         final_percentiles = []
         final_ranks = []
+        final_y_on_curve = []  # new: y values snapped to curve
         valid_seeds = []
 
         for run_meta in runs:
@@ -342,11 +343,19 @@ def plot_final_accuracy_distribution(
                 if q_val_acc and isinstance(q_val_acc, list) and len(q_val_acc) > 0:
                     last_acc = q_val_acc[-1]
                     rank = np.searchsorted(accs_sorted, last_acc, side="right")
+
+                    # Snap the plotted y-value to the black curve at this rank
+                    # (handle boundaries and 0-based indexing)
+                    r_clamped = min(rank, total_archs - 1)
+                    idx_on_curve = max(r_clamped - 1, 0)
+                    y_on_curve = accs_sorted[idx_on_curve]
+
                     percentile = 100.0 * rank / float(len(accs_sorted))
 
                     final_accs.append(last_acc)
                     final_percentiles.append(percentile)
                     final_ranks.append(rank)
+                    final_y_on_curve.append(y_on_curve)
                     valid_seeds.append(run_meta["seed"])
                 else:
                     print(
@@ -367,39 +376,43 @@ def plot_final_accuracy_distribution(
         mean_acc = np.mean(final_accs)
         mean_rank = np.mean(final_ranks)
 
-        # Create legend label
+        # Get the mean point ON the curve (y from curve at mean_rank)
+        x_grid = np.arange(total_archs, dtype=float)
+        mean_y_on_curve = float(np.interp(mean_rank, x_grid, accs_sorted))
+
         legend_label = f"{group_label} | Avg. Percentile: {mean_percentile:.2f} ± {std_percentile:.2f}"
 
-        # Plot thick horizontal and vertical lines for the average
-        # Horizontal line for average accuracy
-        ax.plot([0, mean_rank], [mean_acc, mean_acc], color=color, linewidth=2)
-        # Vertical line for average rank
-        ax.plot([mean_rank, mean_rank], [0, mean_acc], color=color, linewidth=2)
+        # Draw L-shape to the on-curve mean point so it aligns with the black curve
+        ax.plot(
+            [0, mean_rank], [mean_y_on_curve, mean_y_on_curve], color=color, linewidth=2
+        )
+        ax.plot([mean_rank, mean_rank], [0, mean_y_on_curve], color=color, linewidth=2)
 
-        # Add a proxy artist for the legend with the correct label and color
         from matplotlib.lines import Line2D
 
         ax.add_artist(Line2D([0], [0], color=color, lw=2, label=legend_label))
 
-        # Plot markers for each seed on the distribution curve
-        for i, acc in enumerate(final_accs):
+        # Plot seed markers snapped to the curve
+        for i, rank in enumerate(final_ranks):
             seed = valid_seeds[i]
-            rank = final_ranks[i]
             marker = seed_to_marker.get(seed, "x")
 
-            # Adjust marker size and width based on the marker type
+            r_clamped = min(rank, total_archs - 1)
+            idx_on_curve = max(r_clamped - 1, 0)
+            y_on_curve = accs_sorted[idx_on_curve]
+
             current_markersize = 8 if marker == "+" else 5
             current_markeredgewidth = 2 if marker == "+" else 1
 
             ax.plot(
                 rank,
-                acc,
+                y_on_curve,  # snap to curve
                 marker=marker,
                 color=color,
                 markersize=current_markersize,
                 linestyle="None",
                 markeredgewidth=current_markeredgewidth,
-                zorder=10,  # Ensure markers are on top
+                zorder=10,
             )
 
     # --- 5. Finalize Plot ---

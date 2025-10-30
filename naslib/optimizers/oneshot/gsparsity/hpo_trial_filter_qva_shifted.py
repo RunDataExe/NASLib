@@ -93,7 +93,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--dest-dir",
-        default=None,
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo_queried_val_acc/WHPO_Databases_filtered",
         help="Optional directory to write filtered DBs into. Defaults to next to the source DB.",
     )
     p.add_argument(

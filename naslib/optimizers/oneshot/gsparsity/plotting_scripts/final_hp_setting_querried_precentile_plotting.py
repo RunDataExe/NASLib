@@ -994,7 +994,7 @@ def plot_anytime_performance(
                     ncol=1,  # vertical
                 )
 
-                ax.set_xlabel("Runtime (s) [Linear Scale]")
+                ax.set_xlabel("Normalized Time (s) [Linear Scale]")
                 if acc_metric == "valid_acc":
                     ax.set_title(
                         f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -1233,7 +1233,7 @@ def plot_anytime_performance(
             ncol=1,
         )
 
-        ax.set_xlabel("Runtime (s) [Linear Scale]")
+        ax.set_xlabel("Normalized Time (s) [Linear Scale]")
         if acc_metric == "valid_acc":
             ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
             plot_title = f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"

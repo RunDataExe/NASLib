@@ -917,9 +917,9 @@ def make_fixed_time_reports(
             )
 
         ax.set_xlabel(
-            "Runtime (s) [Linear Scale]"
+            "Normalized Time (s) [Linear Scale]"
             if xscale == "linear"
-            else "Runtime (s) [Log Scale]"
+            else "Normalized Time (s) [Log Scale]"
         )
         ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(

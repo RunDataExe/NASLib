@@ -1200,9 +1200,9 @@ def make_search_to_eval_transfer(
         ax.xaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
 
-        ax.set_xlabel("HPO Search Validation Accuracy (%) [Linear Scale]")
+        ax.set_xlabel("HPO Queried Validation Accuracy (%) [Linear Scale]")
         ax.set_ylabel("Final Mean Validation Accuracy (%) [Linear Scale]")
-        ax.set_title(f"Search Phase -> Transfer -> Eval Phase | {ds}")
+        ax.set_title(f"HPO Phase -> Transfer -> Eval Phase | {ds}")
         ax.grid(True, ls="-", alpha=0.5)
         out_png = os.path.join(out_dir, f"{ds}_search_to_eval_scatter.png")
         plt.savefig(out_png, bbox_inches="tight")

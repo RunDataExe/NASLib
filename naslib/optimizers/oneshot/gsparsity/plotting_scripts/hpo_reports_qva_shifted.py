@@ -119,6 +119,27 @@ def _sort_key_method(m):
     )
 
 
+def clean_trials_by_restart(trials):
+    """
+    Match the filter: keep the contiguous HPO block between the last two FAIL/RUNNING trials.
+    - Exclude the very last FAIL/RUNNING (canceled current run).
+    - If only one FAIL/RUNNING exists, keep everything strictly before it.
+    - If none exist, keep all trials.
+    """
+    invalid = sorted(
+        (t for t in trials if t.state in (TrialState.FAIL, TrialState.RUNNING)),
+        key=lambda t: t.number,
+    )
+    if len(invalid) == 0:
+        return trials
+    if len(invalid) == 1:
+        cutoff = invalid[-1].number
+        return [t for t in trials if t.number < cutoff]
+    second_last = invalid[-2].number
+    last_invalid = invalid[-1].number
+    return [t for t in trials if second_last < t.number < last_invalid]
+
+
 # ---- robust filename parsing ----
 def _is_int_token(tok: str) -> bool:
     try:
@@ -549,10 +570,6 @@ def clip_to_horizon(xs: np.ndarray, ys: np.ndarray, T: float):
 
 
 def _extract_scaled_queried_time(errors: dict, epoch_budget: int) -> float:
-    """
-    Extract final scaled queried train time for the given epoch budget.
-    Accepts list/dict/scalar under common keys.
-    """
     if errors is None:
         return 0.0
     key_variants = [
@@ -568,7 +585,6 @@ def _extract_scaled_queried_time(errors: dict, epoch_budget: int) -> float:
             break
     if val is None:
         return 0.0
-
     if isinstance(val, list):
         if not val:
             return 0.0
@@ -577,7 +593,6 @@ def _extract_scaled_queried_time(errors: dict, epoch_budget: int) -> float:
             return float(val[idx])
         except Exception:
             return 0.0
-
     if isinstance(val, dict):
         if epoch_budget is not None:
             if epoch_budget in val:
@@ -590,7 +605,6 @@ def _extract_scaled_queried_time(errors: dict, epoch_budget: int) -> float:
                     return float(val[str(epoch_budget)])
                 except Exception:
                     pass
-        # fallback: largest key
         try:
             keys = sorted([int(k) for k in val.keys()])
             if not keys:
@@ -598,11 +612,30 @@ def _extract_scaled_queried_time(errors: dict, epoch_budget: int) -> float:
             return float(val[str(keys[-1])])
         except Exception:
             return 0.0
-
     try:
         return float(val)
     except Exception:
         return 0.0
+
+
+def _trial_duration_from_artifacts(
+    whpo_root: str, meta: dict, trial: optuna.trial.FrozenTrial
+) -> float:
+    """
+    Duration = sum(errors.json['runtime'] up to 'budget') + final scaled_queried_train_time at that budget.
+    """
+    bud = _get_trial_budget(trial)
+    tdir = _trial_artifact_dir(whpo_root, meta, trial.number)
+    errors = _load_errors_json(tdir)
+
+    measured = []
+    if errors is not None:
+        measured = errors.get("runtime", []) or []
+        if not isinstance(measured, list):
+            measured = []
+    measured_sum = float(sum(measured[: bud if bud and bud > 0 else None]))
+    q_final = _extract_scaled_queried_time(errors, bud if bud else 0)
+    return measured_sum + q_final
 
 
 def _trial_artifact_dir(root: str, meta: dict, trial_number: int) -> str:
@@ -683,59 +716,72 @@ def _fallback_datetime_curve(trials, offset: float = 0.0):
     return np.asarray(xs), np.asarray(ys)
 
 
+def _trial_query_extra_seconds(
+    whpo_root: str, meta: dict, trial: optuna.trial.FrozenTrial
+) -> float:
+    bud = _get_trial_budget(trial)
+    tdir = _trial_artifact_dir(whpo_root, meta, trial.number)
+    errors = _load_errors_json(tdir)
+    return _extract_scaled_queried_time(errors, bud if bud else 0)
+
+
 def build_shifted_curve(
     meta: dict, study: optuna.study.Study, whpo_root: str, durations_map: dict
 ):
     """
-    Build xs, ys using:
-      - one-time shift for zcp-pre optimizers (by dataset-specific duration)
-      - per-trial time = sum(runtime[:budget]) + scaled_queried_train_time_at_budget
-      - incumbents from COMPLETE value or PRUNED last intermediate
-      - prepend (0,0) so the plot starts at 0 and interpolates to first shifted point
+    Build xs, ys using cumulative normalized runtime (like the filter) instead of DB wall-clock:
+      - x_k = offset(zcp-pre, once) + sum_{i<=k} [ sum(runtime[:budget_i]) + scaled_queried_train_time_i ]
+      - y_k = incumbent accuracy after trial k (COMPLETE value or PRUNED last intermediate)
+      - prepend (0,0) so interpolation ramps from 0 to the first shifted datapoint.
+    Only uses trials present in the (filtered) DB.
     """
-    trials = [
-        t for t in study.trials if t.state in (TrialState.COMPLETE, TrialState.PRUNED)
+    # NEW: apply the same restart cleaning used by the HPO filter
+    raw = [
+        t
+        for t in study.trials
+        if t.state
+        in (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL, TrialState.RUNNING)
     ]
+    cleaned = clean_trials_by_restart(raw)
+    trials = [t for t in cleaned if t.state in (TrialState.COMPLETE, TrialState.PRUNED)]
+    # keep execution order stable; fall back to trial number if datetimes are missing
     trials = sorted(
-        trials,
-        key=lambda t: t.datetime_complete or t.datetime_start or t.number,
+        trials, key=lambda t: t.datetime_complete or t.datetime_start or t.number
     )
 
     offset = 0.0
     if str(meta["optimizer"]) in ZCP_PRE_METHODS:
         offset = float(durations_map.get(str(meta["dataset"]), 0.0))
 
-    totals = []
-    values = []
-    for t in trials:
-        v = trial_best_value(t)
-        if v is None:
-            continue
-        try:
-            tot = _trial_total_time_from_artifacts(whpo_root, meta, t)
-        except Exception:
-            tot = 0.0
-        totals.append(tot)
-        values.append(float(v))
-
-    if not totals or sum(totals) <= 0.0:
-        # fallback to datetime-based, but still apply shift and prepend (0,0)
-        return _fallback_datetime_curve(trials, offset=offset)
-
     xs = [0.0]
     ys = [0.0]
     cum = 0.0
     best = -np.inf
-    for tot, v in zip(totals, values):
-        cum += float(tot)
+    for t in trials:
+        v = trial_best_value(t)
+        if v is None:
+            continue
+        dur = _trial_duration_from_artifacts(whpo_root, meta, t)
+        if not np.isfinite(dur) or dur < 0:
+            continue
+        cum += float(dur)
         x = offset + cum
         best = max(best, v)
         xs.append(x)
         ys.append(best)
+
     return np.asarray(xs), np.asarray(ys)
 
 
-def make_fixed_time_reports(metas, studies, out_dir, whpo_dir=None, durations_map=None):
+def make_fixed_time_reports(
+    metas,
+    studies,
+    out_dir,
+    whpo_dir=None,
+    durations_map=None,
+    xscale="linear",
+    debug_curves=False,
+):
     os.makedirs(out_dir, exist_ok=True)
 
     # Build method style mapping (consistent order across plots)
@@ -746,26 +792,37 @@ def make_fixed_time_reports(metas, studies, out_dir, whpo_dir=None, durations_ma
     # Build curves grouped by dataset/method
     per = defaultdict(list)
     for meta, st in zip(metas, studies):
-        # NEW: build shifted curve using artifacts and one-time zcp-pre offset
         xs, ys = build_shifted_curve(meta, st, whpo_dir, durations_map or {})
         if len(xs) == 0:
             continue
         per[(meta["dataset"], method_key(meta))].append(dict(xs=xs, ys=ys, meta=meta))
 
-    # Decide common horizons per dataset
+    # Decide common horizons per dataset USING THE FILTER'S LOGIC:
+    # T2 = min total time among NON zcp-pre methods (largest time everyone non-pre covers).
     horizons = {}
     for dataset in {m["dataset"] for m in metas}:
-        last_times = []
+        nonpre_totals = []
+        all_totals = []
         for (ds, mkey), runs in per.items():
             if ds != dataset:
                 continue
-            for r in runs:
-                last_times.append(r["xs"][-1])
-        if not last_times:
+            total = runs[0]["xs"][-1]
+            all_totals.append(total)
+            opt = runs[0]["meta"]["optimizer"]
+            if opt not in ZCP_PRE_METHODS:
+                nonpre_totals.append(total)
+        if nonpre_totals:
+            T2 = float(np.min(nonpre_totals))
+        elif all_totals:
+            T2 = float(np.min(all_totals))
+        else:
             continue
-        T2 = float(np.min(last_times))
         T1 = max(1e-6, 0.1 * T2)
         horizons[dataset] = (T1, T2)
+        if debug_curves:
+            print(
+                f"[DEBUG] {dataset}: chosen T2={T2:.2f}s (min over non-pre), T1={T1:.2f}s"
+            )
 
     # Dataset-level accuracy reference (optional; used only for auc_norm_T2)
     dataset_ref = {}
@@ -802,6 +859,11 @@ def make_fixed_time_reports(metas, studies, out_dir, whpo_dir=None, durations_ma
 
             xs = runs[0]["xs"]
             ys = runs[0]["ys"]
+
+            if debug_curves and len(xs) > 2:
+                print(
+                    f"[DEBUG] {dataset} | {label}: first xs={xs[:3]} (s), first ys={ys[:3]}, total={xs[-1]:.2f}s"
+                )
 
             # clip the curve to the common horizon (xs already starts at 0, ys at 0)
             xs_c, ys_c = clip_to_horizon(xs, ys, T2)
@@ -854,15 +916,22 @@ def make_fixed_time_reports(metas, studies, out_dir, whpo_dir=None, durations_ma
                 markeredgewidth=1,
             )
 
-        ax.set_xlabel("Runtime (s) [Linear Scale]")
+        ax.set_xlabel(
+            "Runtime (s) [Linear Scale]"
+            if xscale == "linear"
+            else "Runtime (s) [Log Scale]"
+        )
         ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
             f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
         )
-        ax.set_xscale("linear")
+        ax.set_xscale(xscale)
         ax.set_xlim(0, T2)
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+        # Disable scientific notation on x for readability (only on linear scale)
+        if xscale == "linear":
+            ax.ticklabel_format(style="plain", axis="x")
         ax.grid(True, which="both", ls="-", alpha=0.5)
 
         # legend in consistent order, with AUC numbers
@@ -1145,17 +1214,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--db_dir",
-        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases",
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo_queried_val_acc/WHPO_Databases_filtered",
         help="Folder with *.db from your HPO runs (WHPO_Databases)",
     )
     ap.add_argument(
         "--out_dir",
-        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/hpo",
+        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/hpo_qva",
     )
     ap.add_argument("--search_space", default="nasbench201")
     ap.add_argument(
         "--final_root_dir",
-        default="naslib/optimizers/oneshot/gsparsity/result_final_hp",
+        default="naslib/optimizers/oneshot/gsparsity/result_final_hp_queried_val_acc",
         help="Root dir of final runs (errors.json tree) to build Search→Eval transfer",
     )
     # NEW: where to place the annotation
@@ -1173,6 +1242,12 @@ def main():
         default="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
         help="Directory containing arch_scores_duration_*.json files for zcp-pre shift.",
     )
+    ap.add_argument("--xscale", choices=["linear", "log"], default="linear")
+    ap.add_argument(
+        "--debug_curves",
+        action="store_true",
+        help="Print first few (x,y) points and totals per curve.",
+    )
     args = ap.parse_args()
 
     metas, studies = load_studies(args.db_dir, args.search_space)
@@ -1189,6 +1264,8 @@ def main():
         args.out_dir,
         whpo_dir=args.whpo_dir,
         durations_map=durations_map,
+        xscale=args.xscale,
+        debug_curves=args.debug_curves,
     )
     make_search_to_eval_transfer(
         metas,

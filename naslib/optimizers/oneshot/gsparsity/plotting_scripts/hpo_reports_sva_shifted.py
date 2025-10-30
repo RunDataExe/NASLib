@@ -508,9 +508,9 @@ def make_fixed_time_reports(metas, studies, out_dir, durations_map=None):
             )
 
         ax.set_xlabel("Wallclock Time (s) [Linear Scale]")
-        ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
+        ax.set_ylabel("Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
-            f"HPO Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
+            f"HPO Incumbent Anytime Search Validation Performance | {dataset.upper()} | NAS-Bench-201"
         )
         ax.set_xscale("linear")
         ax.set_xlim(left=0)

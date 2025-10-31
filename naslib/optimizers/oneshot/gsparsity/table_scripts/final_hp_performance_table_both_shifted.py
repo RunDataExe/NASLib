@@ -199,6 +199,16 @@ def compute_run_stats(
 
     final_time = float(total_time[-1])
 
+    # Compute final accuracies respecting paradigm semantics
+    if is_random_search:
+        # final incumbent for random search
+        final_train = float(np.nanmax(train_acc))
+        final_valid = float(np.nanmax(valid_acc))
+    else:
+        # last queried arch for one-shot/two-stage
+        final_train = float(train_acc[-1])
+        final_valid = float(valid_acc[-1])
+
     # NEW: add dataset-specific extra time only for zcp-pre methods
     if optimizer in ZCP_PRE_METHODS:
         extra = float(durations_map.get(dataset, 0.0))
@@ -206,8 +216,8 @@ def compute_run_stats(
             final_time += extra
 
     return {
-        "train_acc": float(train_acc[-1]),
-        "valid_acc": float(valid_acc[-1]),
+        "train_acc": final_train,
+        "valid_acc": final_valid,
         "total_time": final_time,
     }
 

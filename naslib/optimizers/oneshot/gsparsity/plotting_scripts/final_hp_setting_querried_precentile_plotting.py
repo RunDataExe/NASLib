@@ -341,7 +341,19 @@ def plot_final_accuracy_distribution(
                 # Use 'queried_val_acc' for final accuracy
                 q_val_acc = data.get("queried_val_acc")
                 if q_val_acc and isinstance(q_val_acc, list) and len(q_val_acc) > 0:
-                    last_acc = q_val_acc[-1]
+                    # Detect random search: all losses are -1
+                    loss = data.get("train_loss", [])
+                    is_random_search = (
+                        isinstance(loss, list)
+                        and len(loss) > 0
+                        and all(l == -1 for l in loss)
+                    )
+                    # Final-model semantics: incumbent for RS, last query for others
+                    last_acc = (
+                        float(max(q_val_acc))
+                        if is_random_search
+                        else float(q_val_acc[-1])
+                    )
                     rank = np.searchsorted(accs_sorted, last_acc, side="right")
 
                     # Snap the plotted y-value to the black curve at this rank

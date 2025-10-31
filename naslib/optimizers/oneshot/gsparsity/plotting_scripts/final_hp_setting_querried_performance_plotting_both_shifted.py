@@ -799,18 +799,25 @@ def plot_anytime_performance(
             if ds == dataset
         ]
 
-        # --- Pre-scan to find the global max time for this dataset for AUC normalization ---
-        global_max_time = 0
-        dataset_min_pos_time = np.inf  # NEW
-        all_run_data = {}  # Cache processed data to avoid re-reading files
+        # --- Pre-scan to find a common horizon and cache data (APPLY zcp-pre offset) ---
+        global_T = np.inf
+        dataset_min_pos_time = np.inf
+        all_run_data = {}
         for (optimizer, zcp_method, ds, search_space), runs in ds_groups:
             group_key = (optimizer, zcp_method, ds, search_space)
             all_run_data[group_key] = []
+            zcp_offset = (
+                float(durations_map.get(str(ds), 0.0))
+                if optimizer in ZCP_PRE_METHODS
+                else 0.0
+            )
             for run_meta in runs:
-                time, acc, _ = process_run_data(run_meta["path"], acc_metric, dataset)
+                time, acc, _ = process_run_data(
+                    run_meta["path"], acc_metric, dataset, zcp_pre_offset=zcp_offset
+                )
                 if time is not None and len(time) > 0:
-                    global_max_time = max(global_max_time, time[-1])
-                    # track smallest positive time for log-scale left bound
+                    # use min last time across runs as common horizon
+                    global_T = min(global_T, float(time[-1]))
                     tp = np.asarray(time)
                     tp = tp[tp > 0]
                     if tp.size:
@@ -820,8 +827,12 @@ def plot_anytime_performance(
                     all_run_data[group_key].append(
                         {"meta": run_meta, "time": time, "acc": acc}
                     )
+        if not np.isfinite(global_T):
+            print("  No valid data after pre-scan. Skipping.")
+            plt.close()
+            continue
         print(
-            f"  Global max time for {dataset} set to {global_max_time:.2f}s for AUC normalization."
+            f"  Common horizon for {dataset} set to {global_T:.2f}s (min last time across methods)."
         )
 
         # Keep track for legend handles later
@@ -847,9 +858,18 @@ def plot_anytime_performance(
                 time, acc = run_data["time"], run_data["acc"]
                 run_meta = run_data["meta"]
 
-                # Calculate NORMALIZED AUC
-                run_norm_auc = calculate_normalized_auc(time, acc, global_max_time)
+                # OPTIONAL: compute normalized AUC on the common horizon if you still print it
+                # Clip to [0, global_T] and hold last value constant
+                t = np.asarray(time)
+                a = np.asarray(acc)
+                mask = t <= global_T
+                t_clip = t[mask]
+                a_clip = a[mask]
+                if t_clip.size >= 2 and t_clip[-1] < global_T:
+                    t_clip = np.append(t_clip, global_T)
+                    a_clip = np.append(a_clip, a_clip[-1])
 
+                run_norm_auc = calculate_normalized_auc(t_clip, a_clip, global_T)
                 all_norm_aucs.append(run_norm_auc)
                 all_trajectories.append((time, acc))
                 all_valid_runs_meta.append(run_meta)

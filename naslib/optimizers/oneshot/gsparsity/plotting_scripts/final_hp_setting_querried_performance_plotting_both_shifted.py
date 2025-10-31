@@ -400,6 +400,7 @@ def plot_anytime_performance(
     output_dir="plots",
     combine_plots=True,
     durations_dir="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
+    xscale="linear",  # NEW
 ):
     """
     Generates and saves anytime performance plots for all optimizers found in root_dir.
@@ -734,7 +735,9 @@ def plot_anytime_performance(
                     ncol=1,  # vertical
                 )
 
-                ax.set_xlabel("Normalized Time (s) [Linear Scale]")
+                ax.set_xlabel(
+                    f"Normalized Time (s) [{'Log' if xscale == 'log' else 'Linear'} Scale]"
+                )
                 if acc_metric == "valid_acc":
                     ax.set_title(
                         f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -745,9 +748,26 @@ def plot_anytime_performance(
                         f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
                     )
                     ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
-                ax.set_xscale("linear")
-                ax.set_xlim(left=0)  # Start x-axis at 0 for linear scale
-                ax.set_ylim(bottom=0)  # Start y-axis at 0
+                ax.set_xscale(xscale)
+                if xscale == "log":
+                    # Small linear region near 0 to show the random-guess point and first segment
+                    min_pos_time = np.inf
+                    for t, _ in all_trajectories:
+                        tp = np.asarray(t)
+                        tp = tp[tp > 0]
+                        if tp.size:
+                            min_pos_time = min(min_pos_time, float(tp.min()))
+                    linthresh = (
+                        float(min_pos_time) if np.isfinite(min_pos_time) else 1.0
+                    )
+                    try:
+                        ax.set_xscale("symlog", linthresh=linthresh)
+                    except TypeError:
+                        ax.set_xscale("symlog", linthreshx=linthresh)
+                    ax.set_xlim(left=0)  # include t=0
+                else:
+                    ax.set_xlim(left=0)
+                ax.set_ylim(bottom=0)
                 ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
                 ax.grid(True, which="both", ls="-", alpha=0.5)
 
@@ -781,6 +801,7 @@ def plot_anytime_performance(
 
         # --- Pre-scan to find the global max time for this dataset for AUC normalization ---
         global_max_time = 0
+        dataset_min_pos_time = np.inf  # NEW
         all_run_data = {}  # Cache processed data to avoid re-reading files
         for (optimizer, zcp_method, ds, search_space), runs in ds_groups:
             group_key = (optimizer, zcp_method, ds, search_space)
@@ -789,6 +810,13 @@ def plot_anytime_performance(
                 time, acc, _ = process_run_data(run_meta["path"], acc_metric, dataset)
                 if time is not None and len(time) > 0:
                     global_max_time = max(global_max_time, time[-1])
+                    # track smallest positive time for log-scale left bound
+                    tp = np.asarray(time)
+                    tp = tp[tp > 0]
+                    if tp.size:
+                        dataset_min_pos_time = min(
+                            dataset_min_pos_time, float(tp.min())
+                        )
                     all_run_data[group_key].append(
                         {"meta": run_meta, "time": time, "acc": acc}
                     )
@@ -990,7 +1018,9 @@ def plot_anytime_performance(
             ncol=1,
         )
 
-        ax.set_xlabel("Normalized Time (s) [Linear Scale]")
+        ax.set_xlabel(
+            f"Normalized Time (s) [{'Log' if xscale == 'log' else 'Linear'} Scale]"
+        )
         if acc_metric == "valid_acc":
             ax.set_ylabel("Incumbent Validation Accuracy (%) [Linear Scale]")
             plot_title = f"Incumbent Anytime Validation Performance | {dataset.upper()} | NAS-Bench-201"
@@ -998,8 +1028,20 @@ def plot_anytime_performance(
             ax.set_ylabel("Incumbent Training Accuracy (%) [Linear Scale]")
             plot_title = f"Incumbent Anytime Training Performance | {dataset.upper()} | NAS-Bench-201"
         ax.set_title(plot_title)
-        ax.set_xscale("linear")
-        ax.set_xlim(left=1)
+        ax.set_xscale(xscale)
+        if xscale == "log":
+            linthresh = (
+                float(dataset_min_pos_time)
+                if np.isfinite(dataset_min_pos_time)
+                else 1.0
+            )
+            try:
+                ax.set_xscale("symlog", linthresh=linthresh)
+            except TypeError:
+                ax.set_xscale("symlog", linthreshx=linthresh)
+            ax.set_xlim(left=0)  # show the t=0 random-guess point
+        else:
+            ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -1054,6 +1096,12 @@ def main():
         default="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
         help="Directory containing arch_scores_duration_*.json files for zcp-pre shift.",
     )
+    parser.add_argument(
+        "--xscale",
+        choices=["linear", "log"],
+        default="linear",
+        help="Scale for the x-axis (time).",
+    )
     # python naslib/optimizers/oneshot/gsparsity/final_hp_setting_performance_plotting.py --combine_plots --show_auc_text --out_dir naslib/optimizers/oneshot/gsparsity/final_hp_visualization
     parser.set_defaults(combine_plots=False, show_auc_text=False, show_auc_fill=False)
     args = parser.parse_args()
@@ -1066,6 +1114,7 @@ def main():
         output_dir=args.out_dir,
         combine_plots=args.combine_plots,
         durations_dir=args.durations_dir,
+        xscale=args.xscale,  # NEW
     )
 
 

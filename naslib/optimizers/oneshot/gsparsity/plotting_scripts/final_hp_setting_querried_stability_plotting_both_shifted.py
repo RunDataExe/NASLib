@@ -360,6 +360,7 @@ def plot_anytime_stability(
     output_dir="plots",
     combine_plots=True,
     durations_dir="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
+    xscale="linear",  # NEW
 ):
     """
     Generates and saves anytime stability plots for all optimizers found in root_dir.
@@ -644,11 +645,13 @@ def plot_anytime_stability(
                 ax.legend(
                     handles=handles + seed_handles,
                     labels=[instability_label] + seed_labels,
-                    loc="lower right",
+                    loc="upper left",
                     ncol=1,
                 )
 
-                ax.set_xlabel("Normalized Time (s) [Linear Scale]")
+                ax.set_xlabel(
+                    f"Normalized Time (s) [{'Log' if xscale == 'log' else 'Linear'} Scale]"
+                )
                 if acc_metric == "valid_acc":
                     ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
                     ax.set_title(
@@ -659,11 +662,26 @@ def plot_anytime_stability(
                     ax.set_title(
                         f"Anytime Raw Training Stability | {dataset.upper()} | NAS-Bench-201"
                     )
-                # Match performance plotting: use linear x-axis for individual (non-combined) plots,
-                # and start at 0 seconds so the random-guess point at t=0 is visible.
-                ax.set_xscale("linear")
-                ax.set_xlim(left=0)
-                ax.set_ylim(bottom=0)  # Start y-axis at 0
+                ax.set_xscale(xscale)
+                if xscale == "log":
+                    # Linear region up to the first real datapoint across seeds
+                    min_pos_time = np.inf
+                    for t, _ in all_trajectories:
+                        tp = np.asarray(t)
+                        tp = tp[tp > 0]
+                        if tp.size:
+                            min_pos_time = min(min_pos_time, float(tp.min()))
+                    linthresh = (
+                        float(min_pos_time) if np.isfinite(min_pos_time) else 1.0
+                    )
+                    try:
+                        ax.set_xscale("symlog", linthresh=linthresh)
+                    except TypeError:
+                        ax.set_xscale("symlog", linthreshx=linthresh)
+                    ax.set_xlim(left=0)
+                else:
+                    ax.set_xlim(left=0)
+                ax.set_ylim(bottom=0)
                 ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
                 ax.grid(True, which="both", ls="-", alpha=0.5)
 
@@ -832,6 +850,15 @@ def plot_anytime_stability(
             # collect method handle/label for the combined legend
             method_handles.append(instability_handle)
             method_labels.append(instability_label)
+            # Track smallest positive time for later axis limit
+            # Add this near where all_trajectories is available
+            if "dataset_min_pos_time" not in locals():
+                dataset_min_pos_time = np.inf
+            for t, _ in all_trajectories:
+                tp = np.asarray(t)
+                tp = tp[tp > 0]
+                if tp.size:
+                    dataset_min_pos_time = min(dataset_min_pos_time, float(tp.min()))
 
         # Legend: methods + seed markers (use collected method_handles so legend entries exist even
         # when bands were not drawn)
@@ -855,11 +882,13 @@ def plot_anytime_stability(
         ax.legend(
             handles=method_handles + seed_handles,
             labels=method_labels + seed_labels,
-            loc="lower right",
+            loc="upper left",
             ncol=1,
         )
 
-        ax.set_xlabel("Normalized Time (s) [Linear Scale]")
+        ax.set_xlabel(
+            f"Normalized Time (s) [{'Log' if xscale == 'log' else 'Linear'} Scale]"
+        )
         if acc_metric == "valid_acc":
             ax.set_ylabel("Raw Validation Accuracy (%) [Linear Scale]")
             plot_title = (
@@ -871,9 +900,21 @@ def plot_anytime_stability(
                 f"Anytime Raw Training Stability | {dataset.upper()} | NAS-Bench-201"
             )
         ax.set_title(plot_title)
-        # Match performance plotting and start at zero so the t=0 point is visible
-        ax.set_xscale("linear")
-        ax.set_xlim(left=0)  # CHANGED: start at zero
+        ax.set_xscale(xscale)
+        if xscale == "log":
+            linthresh = (
+                float(dataset_min_pos_time)
+                if "dataset_min_pos_time" in locals()
+                and np.isfinite(dataset_min_pos_time)
+                else 1.0
+            )
+            try:
+                ax.set_xscale("symlog", linthresh=linthresh)
+            except TypeError:
+                ax.set_xscale("symlog", linthreshx=linthresh)
+            ax.set_xlim(left=0)
+        else:
+            ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -928,6 +969,12 @@ def main():
         default="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
         help="Directory containing arch_scores_duration_*.json files for zcp-pre shift.",
     )
+    parser.add_argument(
+        "--xscale",
+        choices=["linear", "log"],
+        default="linear",
+        help="Scale for the x-axis (time).",
+    )
     parser.set_defaults(combine_plots=False, show_auc_text=False, show_auc_fill=False)
     args = parser.parse_args()
 
@@ -939,6 +986,7 @@ def main():
         output_dir=args.out_dir,
         combine_plots=args.combine_plots,
         durations_dir=args.durations_dir,
+        xscale=args.xscale,  # NEW
     )
 
 

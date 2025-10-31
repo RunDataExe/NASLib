@@ -921,7 +921,7 @@ def make_fixed_time_reports(
             if xscale == "linear"
             else "Normalized Time (s) [Log Scale]"
         )
-        ax.set_ylabel("Queried Validation Accuracy (%) [Linear Scale]")
+        ax.set_ylabel("Incumbent Queried Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
             f"HPO Incumbent Anytime Queried Validation Performance | {dataset.upper()} | NAS-Bench-201"
         )

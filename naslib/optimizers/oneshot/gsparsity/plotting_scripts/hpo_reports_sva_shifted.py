@@ -508,7 +508,7 @@ def make_fixed_time_reports(metas, studies, out_dir, durations_map=None):
             )
 
         ax.set_xlabel("Wallclock Time (s) [Linear Scale]")
-        ax.set_ylabel("Search Validation Accuracy (%) [Linear Scale]")
+        ax.set_ylabel("Incumbent Search Validation Accuracy (%) [Linear Scale]")
         ax.set_title(
             f"HPO Incumbent Anytime Search Validation Performance | {dataset.upper()} | NAS-Bench-201"
         )
@@ -845,6 +845,219 @@ def make_search_to_eval_transfer(
         plt.savefig(out_png, bbox_inches="tight")
         plt.close()
         print(f"Saved {out_png}")
+
+    # ---- Additional cross-dataset transfer: CIFAR100 (HPO) -> CIFAR10 (Eval) ----
+    # Prepare case-insensitive dataset keys for joining while preserving originals
+    hpo_m_lc = hpo_m.copy()
+    fin_m_lc = fin_m.copy()
+    if "dataset" in hpo_m_lc.columns:
+        hpo_m_lc["dataset_lc"] = hpo_m_lc["dataset"].astype(str).str.lower()
+    if "dataset" in fin_m_lc.columns:
+        fin_m_lc["dataset_lc"] = fin_m_lc["dataset"].astype(str).str.lower()
+
+    cross_pairs = [("cifar100", "cifar10")]
+    for src, dst in cross_pairs:
+        hm = hpo_m_lc[hpo_m_lc.get("dataset_lc", "") == src].copy()
+        fm = fin_m_lc[fin_m_lc.get("dataset_lc", "") == dst].copy()
+        if hm.empty or fm.empty:
+            print(f"No data for cross transfer {src} -> {dst}.")
+            continue
+
+        mc = pd.merge(
+            hm,
+            fm,
+            left_on=["merge_opt", "zcp_method"],
+            right_on=["merge_opt", "zcp_method"],
+            how="inner",
+            suffixes=("_hpo", "_eval"),
+        )
+        if mc.empty:
+            print(f"No overlap between HPO({src}) and Eval({dst}) runs after merge.")
+            continue
+
+        # Restore None for zcp_method for reporting/labels
+        mc["zcp_method"] = mc["zcp_method"].replace(SENT, np.nan)
+
+        # Harmonize column names for plotting compatibility
+        if "optimizer_hpo" in mc.columns:
+            mc = mc.rename(columns={"optimizer_hpo": "optimizer_x"})
+        mc["hpo_dataset"] = mc.get("dataset_hpo", src)
+        mc["eval_dataset"] = mc.get("dataset_eval", dst)
+
+        # Metrics and ranks (per eval dataset)
+        mc["delta_final_minus_hpo"] = mc["mean_final"] - mc["hpo_search_best"]
+        mc["rank_by_hpo"] = mc.groupby("eval_dataset")["hpo_search_best"].rank(
+            ascending=False, method="min"
+        )
+        mc["rank_by_final"] = mc.groupby("eval_dataset")["mean_final"].rank(
+            ascending=False, method="min"
+        )
+        mc["rank_shift"] = mc["rank_by_final"] - mc["rank_by_hpo"]
+
+        # Save CSV
+        csv_path = os.path.join(out_dir, f"search_to_eval_transfer_{src}_to_{dst}.csv")
+        mc.sort_values(["eval_dataset", "mean_final"], ascending=[True, False]).to_csv(
+            csv_path, index=False
+        )
+        print(f"Saved {csv_path}")
+
+        # Plot per eval dataset
+        method_list, method_to_color, _, method_to_marker = build_style_maps(metas)
+        for ds, g in mc.groupby("eval_dataset"):
+            fig = plt.figure(figsize=(8, 6))
+            ax = plt.gca()
+
+            for _, r in g.iterrows():
+                zcp = (
+                    None
+                    if (
+                        r["zcp_method"] is None
+                        or (
+                            isinstance(r["zcp_method"], float)
+                            and np.isnan(r["zcp_method"])
+                        )
+                    )
+                    else r["zcp_method"]
+                )
+                mk = (r["optimizer_x"], zcp)
+                color = method_to_color.get(mk, COLORS[0])
+                marker = method_to_marker.get(mk, "o")
+                ax.plot(
+                    r["hpo_search_best"],
+                    r["mean_final"],
+                    marker=marker,
+                    color=color,
+                    linestyle="None",
+                    markersize=8,
+                    markeredgewidth=1,
+                    label=format_method_label(mk[0], mk[1]),
+                )
+
+            xmin = float(min(g["hpo_search_best"].min(), g["mean_final"].min()))
+            xmax = float(max(g["hpo_search_best"].max(), g["mean_final"].max()))
+            ax.plot(
+                [xmin, xmax], [xmin, xmax], linestyle="--", color="gray", linewidth=1
+            )
+
+            x = g["hpo_search_best"].astype(float).to_numpy()
+            y = g["mean_final"].astype(float).to_numpy()
+            pearson = np.nan
+            if x.size >= 2 and np.nanstd(x) > 0 and np.nanstd(y) > 0:
+                pearson = float(np.corrcoef(x, y)[0, 1])
+            rx = pd.Series(x).rank(method="average").to_numpy()
+            ry = pd.Series(y).rank(method="average").to_numpy()
+            spearman = np.nan
+            if rx.size >= 2 and np.nanstd(rx) > 0 and np.nanstd(ry) > 0:
+                spearman = float(np.corrcoef(rx, ry)[0, 1])
+
+            delta_mean = float(g["delta_final_minus_hpo"].mean())
+            delta_std = float(g["delta_final_minus_hpo"].std(ddof=0))
+            avg_rank_shift = float(g["rank_shift"].mean())
+
+            lines = [
+                f"Pearson r = {pearson:.3f}"
+                if np.isfinite(pearson)
+                else "Pearson r = n/a",
+                f"Spearman ρ = {spearman:.3f}"
+                if np.isfinite(spearman)
+                else "Spearman ρ = n/a",
+                f"Δ Acc (Final Mean − HPO): {delta_mean:.3f} ± {delta_std:.3f}",
+                f"Mean Rank Shift: {avg_rank_shift:.2f}",
+            ]
+            txt = "\n".join(lines)
+
+            present = {
+                (
+                    r["optimizer_x"],
+                    None
+                    if (
+                        r["zcp_method"] is None
+                        or (
+                            isinstance(r["zcp_method"], float)
+                            and np.isnan(r["zcp_method"])
+                        )
+                    )
+                    else r["zcp_method"],
+                )
+                for _, r in g.iterrows()
+            }
+            handles = [
+                Line2D(
+                    [0],
+                    [0],
+                    marker=method_to_marker[m],
+                    color=method_to_color[m],
+                    linestyle="None",
+                    markersize=8,
+                    label=format_method_label(m[0], m[1]),
+                )
+                for m in method_list
+                if m in present
+            ]
+            leg = ax.legend(handles=handles, loc="lower right")
+
+            if annot_pos == "bottom_left":
+                ax.text(
+                    0.02,
+                    0.02,
+                    txt,
+                    transform=ax.transAxes,
+                    va="bottom",
+                    ha="left",
+                    fontsize=9,
+                    bbox=dict(
+                        boxstyle="round,pad=0.3",
+                        facecolor="white",
+                        alpha=0.85,
+                        edgecolor="gray",
+                        linewidth=0.5,
+                    ),
+                )
+            else:
+                fig.canvas.draw()
+                bbox_disp = leg.get_window_extent(renderer=fig.canvas.get_renderer())
+                bbox_ax = bbox_disp.transformed(ax.transAxes.inverted())
+                x_ = min(bbox_ax.x1, 0.98)
+                y_ = min(bbox_ax.y1 + 0.02, 0.98)
+                ax.text(
+                    x_,
+                    y_,
+                    txt,
+                    transform=ax.transAxes,
+                    va="bottom",
+                    ha="right",
+                    fontsize=9,
+                    bbox=dict(
+                        boxstyle="round,pad=0.3",
+                        facecolor="white",
+                        alpha=0.85,
+                        edgecolor="gray",
+                        linewidth=0.5,
+                    ),
+                )
+
+            ax.set_xscale("linear")
+            ax.set_yscale("linear")
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            ax.xaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+            ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+
+            ax.set_xlabel("HPO Search Validation Accuracy (%) [Linear Scale]")
+            ax.set_ylabel("Final Mean Validation Accuracy (%) [Linear Scale]")
+            src_lbl = str(g["hpo_dataset"].iloc[0]).upper()
+            dst_lbl = str(ds).upper()
+            ax.set_title(
+                f"HPO Phase -> Transfer -> Eval Phase | HPO: {src_lbl} -> Eval: {dst_lbl}"
+            )
+            ax.grid(True, ls="-", alpha=0.5)
+
+            out_png = os.path.join(
+                out_dir, f"{src}_to_{dst}_search_to_eval_scatter.png"
+            )
+            plt.savefig(out_png, bbox_inches="tight")
+            plt.close()
+            print(f"Saved {out_png}")
 
 
 def main():

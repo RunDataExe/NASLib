@@ -85,13 +85,19 @@ def canonical_optimizer_name(opt: str) -> str:
     Canonicalize optimizer names for merging with final runs.
     Do not change labels used for plotting; only use this for joins.
     """
-    if "zcp_gsparsity" in opt:
+    o = str(opt)
+    # Specific → general to avoid collapsing pre variants
+    if "zcp-pre_zcp_gsparsity" in o:
+        return "zcp-pre_zcp_gsparsity"
+    if "zcp-pre_gsparsity" in o:
+        return "zcp-pre_gsparsity"
+    if "zcp_gsparsity" in o:
         return "zcp_gsparsity"
-    if "gsparsity" in opt and "zcp" not in opt:
+    if "gsparsity" in o and "zcp" not in o:
         return "gsparsity"
-    if "darts" in opt:
+    if "darts" in o:
         return "darts"
-    return opt
+    return o
 
 
 def parse_db_basename(name: str) -> dict:
@@ -660,14 +666,27 @@ def make_search_to_eval_transfer(
     hpo_m["zcp_method"] = hpo_m["zcp_method"].fillna(SENT)
     fin_m["zcp_method"] = fin_m["zcp_method"].fillna(SENT)
 
+    # Canonical method key
     hpo_m["merge_opt"] = hpo_m["optimizer"].apply(canonical_optimizer_name)
     fin_m["merge_opt"] = fin_m["optimizer"].apply(canonical_optimizer_name)
 
+    # COLLAPSE to a single row per (dataset, canonical-method, zcp) BEFORE merge
+    hpo_m = hpo_m.groupby(
+        ["dataset", "merge_opt", "zcp_method"], dropna=False, as_index=False
+    ).agg(hpo_search_best=("hpo_search_best", "max"))
+    fin_m = fin_m.groupby(
+        ["dataset", "merge_opt", "zcp_method"], dropna=False, as_index=False
+    ).agg(
+        mean_final=("mean_final", "mean"),
+        std_final=("std_final", "mean"),
+        seeds=("seeds", "sum"),
+    )
+
+    # Merge on canonical method key
     m = pd.merge(
         hpo_m,
         fin_m,
-        left_on=["dataset", "merge_opt", "zcp_method"],
-        right_on=["dataset", "merge_opt", "zcp_method"],
+        on=["dataset", "merge_opt", "zcp_method"],
         how="inner",
     )
     if m.empty:
@@ -676,8 +695,16 @@ def make_search_to_eval_transfer(
         )
         return
 
-    # restore None for reporting/labels
+    # restore None for reporting/labels and set a stable optimizer column for plotting
     m["zcp_method"] = m["zcp_method"].replace(SENT, np.nan)
+    m["optimizer_x"] = m["merge_opt"]
+
+    # FINAL DEDUP: keep a single point per (dataset, canonical-method, zcp)
+    # rule: prefer higher HPO-best (falls back to higher final mean if desired)
+    m = m.sort_values(
+        ["dataset", "merge_opt", "zcp_method", "hpo_search_best", "mean_final"],
+        ascending=[True, True, True, False, False],
+    ).drop_duplicates(subset=["dataset", "merge_opt", "zcp_method"], keep="first")
 
     m["delta_final_minus_hpo"] = m["mean_final"] - m["hpo_search_best"]
     # Ranks per dataset
@@ -878,11 +905,24 @@ def make_search_to_eval_transfer(
         # Restore None for zcp_method for reporting/labels
         mc["zcp_method"] = mc["zcp_method"].replace(SENT, np.nan)
 
-        # Harmonize column names for plotting compatibility
-        if "optimizer_hpo" in mc.columns:
-            mc = mc.rename(columns={"optimizer_hpo": "optimizer_x"})
+        # Harmonize plotting columns
+        mc["optimizer_x"] = mc["merge_opt"]  # canonical optimizer key for plotting
         mc["hpo_dataset"] = mc.get("dataset_hpo", src)
         mc["eval_dataset"] = mc.get("dataset_eval", dst)
+
+        # FINAL DEDUP: keep a single point per (eval_dataset, canonical-method, zcp)
+        mc = mc.sort_values(
+            [
+                "eval_dataset",
+                "merge_opt",
+                "zcp_method",
+                "hpo_search_best",
+                "mean_final",
+            ],
+            ascending=[True, True, True, False, False],
+        ).drop_duplicates(
+            subset=["eval_dataset", "merge_opt", "zcp_method"], keep="first"
+        )
 
         # Metrics and ranks (per eval dataset)
         mc["delta_final_minus_hpo"] = mc["mean_final"] - mc["hpo_search_best"]

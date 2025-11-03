@@ -720,6 +720,153 @@ def make_search_to_eval_transfer(
         os.path.join(out_dir, "search_to_eval_transfer.csv"), index=False
     )
 
+    # --- Print per-dataset ranks and proxy-fit metrics (HPO vs Final) ---
+    # For each dataset show optimizer, zcp, HPO best, Final mean, delta and ranks.
+    rank_rows = []
+    for ds, gds in m.groupby("dataset"):
+        print(f"\nDataset: {ds}")
+        print(
+            "Optimizer\tZCP\tHPO_best\tFinal_mean\tΔ(Final−HPO)\tRank_HPO\tRank_Final\tRank_shift"
+        )
+        for _, r in gds.sort_values("rank_by_final", ascending=True).iterrows():
+            z = (
+                r["zcp_method"]
+                if not (
+                    isinstance(r["zcp_method"], float) and np.isnan(r["zcp_method"])
+                )
+                else ""
+            )
+            print(
+                f"{r['optimizer_x']}\t{z}\t{r['hpo_search_best']:.4f}\t{r['mean_final']:.4f}\t{r['delta_final_minus_hpo']:.4f}\t"
+                f"{int(r['rank_by_hpo'])}\t{int(r['rank_by_final'])}\t{float(r['rank_shift']):.2f}"
+            )
+            rank_rows.append(
+                {
+                    "dataset": ds,
+                    "optimizer": r["optimizer_x"],
+                    "zcp_method": r["zcp_method"],
+                    "hpo_search_best": float(r["hpo_search_best"]),
+                    "mean_final": float(r["mean_final"]),
+                    # "delta_final_minus_hpo": float(r["delta_final_minus_hpo"]),
+                    "rank_by_hpo": int(r["rank_by_hpo"]),
+                    "rank_by_final": int(r["rank_by_final"]),
+                    "rank_shift": float(r["rank_shift"]),
+                }
+            )
+
+        # Proxy-fit metrics
+        x = gds["hpo_search_best"].astype(float).to_numpy()
+        y = gds["mean_final"].astype(float).to_numpy()
+        mae = float(np.nanmean(np.abs(y - x))) if x.size > 0 else np.nan
+        rmse = float(np.sqrt(np.nanmean((y - x) ** 2))) if x.size > 0 else np.nan
+        pearson = np.nan
+        if x.size >= 2 and np.nanstd(x) > 0 and np.nanstd(y) > 0:
+            pearson = float(np.corrcoef(x, y)[0, 1])
+        print(
+            f"Proxy-fit: Pearson r = {pearson if np.isfinite(pearson) else 'n/a'}, MAE = {mae:.4f}, RMSE = {rmse:.4f}"
+        )
+
+    # --- Cross-dataset print: CIFAR100 (HPO) -> CIFAR10 (Final) ---
+    # Uses precomputed hpo_m/fin_m with canonical optimizer keys; print only (no plot/result changes).
+    try:
+        hpo_m_lc = hpo_m.copy()
+        fin_m_lc = fin_m.copy()
+        hpo_m_lc["dataset_lc"] = hpo_m_lc["dataset"].astype(str).str.lower()
+        fin_m_lc["dataset_lc"] = fin_m_lc["dataset"].astype(str).str.lower()
+
+        hm = hpo_m_lc[hpo_m_lc["dataset_lc"] == "cifar100"].copy()
+        fm = fin_m_lc[fin_m_lc["dataset_lc"] == "cifar10"].copy()
+
+        if not hm.empty and not fm.empty:
+            mc = pd.merge(
+                hm,
+                fm,
+                on=["merge_opt", "zcp_method"],
+                how="inner",
+                suffixes=("_hpo", "_eval"),
+            )
+            if not mc.empty:
+                # Restore None for zcp display
+                mc["zcp_method"] = mc["zcp_method"].replace(SENT, np.nan)
+                mc["optimizer_x"] = mc["merge_opt"]
+                mc["delta_final_minus_hpo"] = mc["mean_final"] - mc["hpo_search_best"]
+
+                # Ranks within eval dataset (single eval dataset: CIFAR10)
+                mc["rank_by_hpo"] = mc["hpo_search_best"].rank(
+                    ascending=False, method="min"
+                )
+                mc["rank_by_final"] = mc["mean_final"].rank(
+                    ascending=False, method="min"
+                )
+                mc["rank_shift"] = mc["rank_by_final"] - mc["rank_by_hpo"]
+
+                print("\nCross-dataset: CIFAR100 (HPO) -> CIFAR10 (Final)")
+                print(
+                    "Optimizer\tZCP\tHPO_best[CIFAR100]\tFinal_mean[CIFAR10]\tΔ(Final−HPO)\tRank_HPO\tRank_Final\tRank_shift"
+                )
+
+                cross_rows = []
+                for _, r in mc.sort_values("rank_by_final", ascending=True).iterrows():
+                    z = (
+                        r["zcp_method"]
+                        if not (
+                            isinstance(r["zcp_method"], float)
+                            and np.isnan(r["zcp_method"])
+                        )
+                        else ""
+                    )
+                    print(
+                        f"{r['optimizer_x']}\t{z}\t{r['hpo_search_best']:.4f}\t{r['mean_final']:.4f}\t{r['delta_final_minus_hpo']:.4f}\t"
+                        f"{int(r['rank_by_hpo'])}\t{int(r['rank_by_final'])}\t{float(r['rank_shift']):.2f}"
+                    )
+                    cross_rows.append(
+                        {
+                            "optimizer": r["optimizer_x"],
+                            "zcp_method": r["zcp_method"],
+                            "hpo_best_cifar100": float(r["hpo_search_best"]),
+                            "final_mean_cifar10": float(r["mean_final"]),
+                            # "delta_final_minus_hpo": float(r["delta_final_minus_hpo"]),
+                            "rank_by_hpo": int(r["rank_by_hpo"]),
+                            "rank_by_final": int(r["rank_by_final"]),
+                            "rank_shift": float(r["rank_shift"]),
+                        }
+                    )
+
+                # Save cross-dataset CSV
+                if cross_rows:
+                    pd.DataFrame(cross_rows).to_csv(
+                        os.path.join(out_dir, "sva_ranks_cifar100_to_cifar10.csv"),
+                        index=False,
+                    )
+
+                # Proxy-fit for cross transfer
+                x = mc["hpo_search_best"].astype(float).to_numpy()
+                y = mc["mean_final"].astype(float).to_numpy()
+                mae = float(np.nanmean(np.abs(y - x))) if x.size > 0 else np.nan
+                rmse = (
+                    float(np.sqrt(np.nanmean((y - x) ** 2))) if x.size > 0 else np.nan
+                )
+                pearson = np.nan
+                if x.size >= 2 and np.nanstd(x) > 0 and np.nanstd(y) > 0:
+                    pearson = float(np.corrcoef(x, y)[0, 1])
+                print(
+                    f"Proxy-fit (cross): Pearson r = {pearson if np.isfinite(pearson) else 'n/a'}, MAE = {mae:.4f}, RMSE = {rmse:.4f}"
+                )
+            else:
+                print("\nCross-dataset: CIFAR100->CIFAR10 has no overlapping methods.")
+        else:
+            print(
+                "\nCross-dataset: Missing data for CIFAR100 (HPO) or CIFAR10 (Final)."
+            )
+    except Exception as e:
+        print(f"\nCross-dataset print failed: {e}")
+
+    # Save a CSV with the rank rows and proxy-fit aggregated per dataset
+    if rank_rows:
+        pd.DataFrame(rank_rows).to_csv(
+            os.path.join(out_dir, "sva_ranks_per_dataset.csv"), index=False
+        )
+
     # Use the SAME style mapping as the HPO plot
     method_list, method_to_color, _, method_to_marker = build_style_maps(metas)
 

@@ -495,7 +495,7 @@ def make_fixed_time_reports(metas, studies, out_dir, durations_map=None):
             )
 
             # Legend text with raw AUC
-            legend_texts[mkey] = f"{label} | AUC = {auc_raw:.3f}"
+            legend_texts[mkey] = f"{label} | AUC = {auc_raw:.2f}"
 
             # Plot lines/markers
             tgrid = np.linspace(0, xs[-1], 500)
@@ -919,14 +919,14 @@ def make_search_to_eval_transfer(
         delta_mean = float(g["delta_final_minus_hpo"].mean())
         delta_std = float(g["delta_final_minus_hpo"].std(ddof=0))
         avg_rank_shift = float(g["rank_shift"].mean())
-
+        rank_shift_std = float(g["rank_shift"].std(ddof=0))
         lines = [
-            f"Pearson r = {pearson:.3f}" if np.isfinite(pearson) else "Pearson r = n/a",
-            f"Spearman ρ = {spearman:.3f}"
+            f"Pearson r = {pearson:.2f}" if np.isfinite(pearson) else "Pearson r = n/a",
+            f"Spearman ρ = {spearman:.2f}"
             if np.isfinite(spearman)
             else "Spearman ρ = n/a",
-            f"Δ Acc (Final Mean − HPO): {delta_mean:.3f} ± {delta_std:.3f}",
-            f"Mean Rank Shift: {avg_rank_shift:.2f}",
+            f"Mean ± SD of ΔAcc (Final_mean − HPO_best): {delta_mean:.2f} ± {delta_std:.2f}",
+            f"Mean ± SD of Rank Shift: {avg_rank_shift:.2f} ± {rank_shift_std:.2f}",
         ]
         txt = "\n".join(lines)
 

@@ -898,7 +898,7 @@ def make_fixed_time_reports(
                 )
             )
 
-            legend_texts[mkey] = f"{label} | AUC = {auc_raw:.3f}"
+            legend_texts[mkey] = f"{label} | AUC = {auc_raw:.2f}"
 
             # Plot only up to T2 for all methods (interpolation now ramps from 0 to first shifted point)
             tgrid = np.linspace(0, T2, 500)
@@ -1256,14 +1256,14 @@ def make_search_to_eval_transfer(
         delta_mean = float(g["delta_final_minus_hpo"].mean())
         delta_std = float(g["delta_final_minus_hpo"].std(ddof=0))
         avg_rank_shift = float(g["rank_shift"].mean())
-
+        rank_shift_std = float(g["rank_shift"].std(ddof=0))
         lines = [
-            f"Pearson r = {pearson:.3f}" if np.isfinite(pearson) else "Pearson r = n/a",
-            f"Spearman ρ = {spearman:.3f}"
+            f"Pearson r = {pearson:.2f}" if np.isfinite(pearson) else "Pearson r = n/a",
+            f"Spearman ρ = {spearman:.2f}"
             if np.isfinite(spearman)
             else "Spearman ρ = n/a",
-            f"Δ Acc (Final Mean − HPO): {delta_mean:.3f} ± {delta_std:.3f}",
-            f"Mean Rank Shift: {avg_rank_shift:.2f}",
+            f"Mean ± SD of ΔAcc (Final_mean − HPO_best): {delta_mean:.2f} ± {delta_std:.2f}",
+            f"Mean ± SD of Rank Shift: {avg_rank_shift:.2f} ± {rank_shift_std:.2f}",
         ]
         txt = "\n".join(lines)
 
@@ -1316,20 +1316,21 @@ def make_search_to_eval_transfer(
                 ),
             )
         else:
-            # above_legend
+            # above_legend (left-aligned to the legend's left edge)
             fig.canvas.draw()  # ensure we have a renderer
-            bbox_disp = leg.get_window_extent(renderer=fig.canvas.get_renderer())
+            renderer = fig.canvas.get_renderer()
+            bbox_disp = leg.get_window_extent(renderer=renderer)
             bbox_ax = bbox_disp.transformed(ax.transAxes.inverted())
-            # place just above the legend, right-aligned to its right edge
-            x = min(bbox_ax.x1, 0.98)
-            y = min(bbox_ax.y1 + 0.02, 0.98)
+            # place just above the legend, left-aligned to its left edge
+            x = max(0.02, bbox_ax.x0)
+            y = min(0.98, bbox_ax.y1 + 0.02)
             ax.text(
                 x,
                 y,
                 txt,
                 transform=ax.transAxes,
                 va="bottom",
-                ha="right",
+                ha="left",
                 fontsize=9,
                 bbox=dict(
                     boxstyle="round,pad=0.3",

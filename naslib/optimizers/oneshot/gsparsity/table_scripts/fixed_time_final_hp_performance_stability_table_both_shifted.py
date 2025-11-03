@@ -604,6 +604,117 @@ def write_latex_table(
     print(f"Wrote LaTeX table to {output_path}")
 
 
+def _make_unique_path(path: str) -> str:
+    """
+    If path exists, append _1, _2, ... before the extension until a free name is found.
+    """
+    if not os.path.exists(path):
+        return path
+    root, ext = os.path.splitext(path)
+    i = 1
+    while True:
+        candidate = f"{root}_{i}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
+
+
+def compute_and_save_ranks(df: pd.DataFrame, base_output_path: str) -> None:
+    """
+    Create a per-dataset ranking CSV for:
+      - mean Best@T Val Acc (higher is better)
+      - Mean@T Val AUC (higher is better)
+      - Val bandwidth = band_area_valid (lower is better)
+    Also prints human-readable rankings per dataset.
+    """
+    if df.empty:
+        print("[RANK] No data to rank.")
+        return
+
+    # Ensure required columns exist
+    required_cols = {
+        "optimizer",
+        "dataset",
+        "zcp_method",
+        "best_T_valid_mean",
+        "auc_valid_mean",
+        "band_area_valid",
+    }
+    missing = required_cols - set(df.columns)
+    if missing:
+        print(f"[RANK] Missing columns for ranking: {sorted(missing)}", file=sys.stderr)
+        return
+
+    rank_rows = []
+    for ds, sub in df.groupby("dataset", sort=True):
+        sub = sub.copy()
+        n = len(sub)
+
+        # Ranks (NaNs get worst rank n+1)
+        r_best = sub["best_T_valid_mean"].rank(method="min", ascending=False)
+        r_auc = sub["auc_valid_mean"].rank(method="min", ascending=False)
+        r_band = sub["band_area_valid"].rank(method="min", ascending=True)
+
+        sub["rank_best_T_valid_mean"] = r_best.fillna(n + 1).astype(int)
+        sub["rank_auc_valid_mean"] = r_auc.fillna(n + 1).astype(int)
+        sub["rank_band_area_valid"] = r_band.fillna(n + 1).astype(int)
+
+        # Print summaries
+        print(f"\n[RANK] Dataset: {ds} — mean Best@T Val Acc (higher is better)")
+        print(
+            sub.sort_values(["rank_best_T_valid_mean", "optimizer", "zcp_method"])[
+                [
+                    "rank_best_T_valid_mean",
+                    "optimizer",
+                    "zcp_method",
+                    "best_T_valid_mean",
+                ]
+            ].to_string(index=False)
+        )
+
+        print(f"\n[RANK] Dataset: {ds} — Mean@T Val AUC (higher is better)")
+        print(
+            sub.sort_values(["rank_auc_valid_mean", "optimizer", "zcp_method"])[
+                ["rank_auc_valid_mean", "optimizer", "zcp_method", "auc_valid_mean"]
+            ].to_string(index=False)
+        )
+
+        print(f"\n[RANK] Dataset: {ds} — Val bandwidth (band area; lower is better)")
+        print(
+            sub.sort_values(["rank_band_area_valid", "optimizer", "zcp_method"])[
+                ["rank_band_area_valid", "optimizer", "zcp_method", "band_area_valid"]
+            ].to_string(index=False)
+        )
+
+        rank_rows.append(
+            sub[
+                [
+                    "optimizer",
+                    "dataset",
+                    "zcp_method",
+                    "rank_best_T_valid_mean",
+                    "rank_auc_valid_mean",
+                    "rank_band_area_valid",
+                    "best_T_valid_mean",
+                    "auc_valid_mean",
+                    "band_area_valid",
+                ]
+            ]
+        )
+
+    ranks_df = pd.concat(rank_rows, ignore_index=True) if rank_rows else pd.DataFrame()
+
+    # Safe output path next to base output
+    out_dir = os.path.dirname(os.path.abspath(base_output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    base_root, _ = os.path.splitext(os.path.basename(base_output_path))
+    default_path = os.path.join(out_dir, f"{base_root}_ranks.csv")
+    safe_path = _make_unique_path(default_path)
+
+    ranks_df.to_csv(safe_path, index=False)
+    print(f"\n[RANK] Wrote ranks CSV to {safe_path}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -808,6 +919,8 @@ def main() -> None:
     write_latex_table(
         df, latex_output, args.fractional, times_by_dataset, rs_extra_by_dataset
     )
+
+    compute_and_save_ranks(df, args.output)
 
     # Console hint for chosen T per dataset and coverage
     for ds, T in sorted(times_by_dataset.items()):

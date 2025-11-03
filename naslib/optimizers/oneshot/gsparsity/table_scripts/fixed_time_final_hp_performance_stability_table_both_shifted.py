@@ -645,6 +645,13 @@ def compute_and_save_ranks(df: pd.DataFrame, base_output_path: str) -> None:
         print(f"[RANK] Missing columns for ranking: {sorted(missing)}", file=sys.stderr)
         return
 
+    # Round numeric columns to two decimals BEFORE ranking
+    round_cols = ["best_T_valid_mean", "auc_valid_mean", "band_area_valid"]
+    df = df.copy()
+    for c in round_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
+
     rank_rows = []
     for ds, sub in df.groupby("dataset", sort=True):
         sub = sub.copy()
@@ -659,7 +666,7 @@ def compute_and_save_ranks(df: pd.DataFrame, base_output_path: str) -> None:
         sub["rank_auc_valid_mean"] = r_auc.fillna(n + 1).astype(int)
         sub["rank_band_area_valid"] = r_band.fillna(n + 1).astype(int)
 
-        # Print summaries
+        # Print summaries (optional: force two-decimal display)
         print(f"\n[RANK] Dataset: {ds} — mean Best@T Val Acc (higher is better)")
         print(
             sub.sort_values(["rank_best_T_valid_mean", "optimizer", "zcp_method"])[
@@ -669,21 +676,21 @@ def compute_and_save_ranks(df: pd.DataFrame, base_output_path: str) -> None:
                     "zcp_method",
                     "best_T_valid_mean",
                 ]
-            ].to_string(index=False)
+            ].to_string(index=False, float_format=lambda x: f"{x:.2f}")
         )
 
         print(f"\n[RANK] Dataset: {ds} — Mean@T Val AUC (higher is better)")
         print(
             sub.sort_values(["rank_auc_valid_mean", "optimizer", "zcp_method"])[
                 ["rank_auc_valid_mean", "optimizer", "zcp_method", "auc_valid_mean"]
-            ].to_string(index=False)
+            ].to_string(index=False, float_format=lambda x: f"{x:.2f}")
         )
 
         print(f"\n[RANK] Dataset: {ds} — Val bandwidth (band area; lower is better)")
         print(
             sub.sort_values(["rank_band_area_valid", "optimizer", "zcp_method"])[
                 ["rank_band_area_valid", "optimizer", "zcp_method", "band_area_valid"]
-            ].to_string(index=False)
+            ].to_string(index=False, float_format=lambda x: f"{x:.2f}")
         )
 
         rank_rows.append(
@@ -703,6 +710,11 @@ def compute_and_save_ranks(df: pd.DataFrame, base_output_path: str) -> None:
         )
 
     ranks_df = pd.concat(rank_rows, ignore_index=True) if rank_rows else pd.DataFrame()
+
+    # Ensure two-decimal precision in the saved CSV as well
+    for c in round_cols:
+        if c in ranks_df.columns:
+            ranks_df[c] = pd.to_numeric(ranks_df[c], errors="coerce").round(2)
 
     # Safe output path next to base output
     out_dir = os.path.dirname(os.path.abspath(base_output_path))

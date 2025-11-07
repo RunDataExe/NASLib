@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 import matplotlib.colors as mcolors
 
+plt.rcParams["savefig.dpi"] = 300
+plt.rcParams["savefig.format"] = "pdf"
 
 # Prefer NASLib helpers if available
 try:
@@ -466,9 +468,9 @@ def plot_final_accuracy_distribution(
     # Combine method legend with seed marker legend
     ax.legend(handles=handles + seed_handles, loc="lower right")
 
-    filename = f"final_accuracy_distribution_{dataset}.png"
+    filename = f"final_accuracy_distribution_{dataset}.pdf"
     save_path = os.path.join(output_dir, filename)
-    plt.savefig(save_path, bbox_inches="tight")
+    plt.savefig(save_path, bbox_inches="tight", format="pdf")
     plt.close()
     print(f"\nDistribution plot saved to {save_path}")
 
@@ -1026,10 +1028,10 @@ def plot_anytime_performance(
                 filename = (
                     f"performance_{optimizer}_{dataset}_{search_space}_{acc_metric}"
                     + (f"_{zcp_method}" if zcp_method else "")
-                    + ".png"
+                    + ".pdf"
                 )
                 save_path = os.path.join(output_dir, filename)
-                plt.savefig(save_path, bbox_inches="tight")
+                plt.savefig(save_path, bbox_inches="tight", format="pdf")
                 plt.close()
                 print(f"  - Plot saved to {save_path}")
         return
@@ -1259,9 +1261,9 @@ def plot_anytime_performance(
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
 
-        filename = f"combined_performance_plot_{acc_metric}_{dataset}.png"
+        filename = f"combined_performance_plot_{acc_metric}_{dataset}.pdf"
         save_path = os.path.join(output_dir, filename)
-        plt.savefig(save_path, bbox_inches="tight")
+        plt.savefig(save_path, bbox_inches="tight", format="pdf")
         plt.close()
         print(f"Combined plot saved to {save_path}")
 

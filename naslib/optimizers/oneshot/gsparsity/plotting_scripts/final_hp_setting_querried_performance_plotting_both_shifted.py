@@ -64,6 +64,7 @@ DEFAULT_T_MARKERS = {
     "cifar100": 20808.0,
 }
 
+
 def parse_t_markers(arg: str):
     """
     Parse CLI string like 'cifar10=18000,cifar100=20000,ImageNet16-120=36000'
@@ -115,6 +116,42 @@ ZCP_PRE_METHODS = {
     "zcp-pre_gsparsity",
     "zcp-pre_zcp_gsparsity",
 }
+
+
+def _dataset_random_guess(dataset: str, is_percent: bool) -> float:
+    """Match the table: random guess baseline for validation."""
+    k = DATASET_CLASSES.get(dataset, 10)
+    return (100.0 / k) if is_percent else (1.0 / k)
+
+
+def _inject_baseline_table_style(times, acc, dataset, acc_metric):
+    """
+    Identical to the table script:
+      - baseline at t=0 (train: 0.0; valid: random guess in same units as acc)
+      - if first time > 0 insert (0, baseline)
+      - if first time == 0 overwrite the first value with the baseline
+    """
+    t = np.asarray(times, dtype=float)
+    a = np.asarray(acc, dtype=float)
+    if a.size == 0:
+        return np.array([0.0], dtype=float), np.array([0.0], dtype=float)
+
+    acc_is_percent = np.nanmax(a) > 1.5
+    baseline = (
+        0.0
+        if acc_metric == "train_acc"
+        else _dataset_random_guess(dataset, acc_is_percent)
+    )
+
+    if t.size == 0:
+        return np.array([0.0], dtype=float), np.array([baseline], dtype=float)
+    if t[0] > 0.0:
+        t = np.concatenate([[0.0], t])
+        a = np.concatenate([[baseline], a])
+    elif t[0] == 0.0:
+        a = a.copy()
+        a[0] = baseline
+    return t, a
 
 
 def load_zcp_pre_durations(durations_dir):
@@ -371,27 +408,21 @@ def process_run_data(filepath, acc_metric, dataset, zcp_pre_offset=0.0):
         cumulative_search_cost = np.cumsum(runtime)
         total_time = cumulative_search_cost + eval_time
 
-    # NEW: apply one-time shift for zcp-pre methods (only to real datapoints, not the t=0 point)
+    # NEW: apply one-time shift for zcp-pre methods
     if zcp_pre_offset and zcp_pre_offset > 0:
         total_time = total_time + float(zcp_pre_offset)
 
     if len(acc) < 1:
         return None, None, None
 
-    # Ensure random guess uses same units as acc (percent vs fraction)
-    num_classes = DATASET_CLASSES.get(dataset, 10)
-    acc_is_percent = np.nanmax(acc) > 1.5
-    random_guess_acc = (100.0 / num_classes) if acc_is_percent else (1.0 / num_classes)
+    # --- Table-consistent baseline injection (affects the visual prefix) ---
+    total_time, acc = _inject_baseline_table_style(total_time, acc, dataset, acc_metric)
 
-    # Prepend random guess at time=0 (keeps original sequence order)
-    total_time = np.insert(total_time, 0, 0)
-    acc = np.insert(acc, 0, random_guess_acc)
-
-    # --- Compute incumbent along the ORIGINAL order (no sorting) ---
+    # --- Incumbent and duplicate handling (unchanged logic for this script) ---
     acc_inc = np.maximum.accumulate(acc)
 
-    # --- Collapse duplicate timestamps while preserving the first-occurrence order.
-    # For duplicates, keep the maximum incumbent observed for that timestamp.
+    # Collapse duplicate timestamps while preserving first-occurrence order,
+    # keeping the maximum incumbent at each timestamp.
     seen = {}
     order = []
     for t, a in zip(total_time, acc_inc):
@@ -399,21 +430,20 @@ def process_run_data(filepath, acc_metric, dataset, zcp_pre_offset=0.0):
             seen[t] = a
             order.append(t)
         else:
-            # update stored value to the maximum incumbent at this timestamp
             if a > seen[t]:
                 seen[t] = a
 
     times_ordered = np.array([float(t) for t in order], dtype=float)
     acc_ordered = np.array([seen[t] for t in order], dtype=float)
 
-    # --- Ensure non-decreasing timestamps for interpolation (preserve order, add tiny eps where needed) ---
+    # Ensure strictly increasing times
     if len(times_ordered) > 1:
-        eps = 1e-6  # tiny increment in seconds to enforce strict increase while preserving order
+        eps = 1e-6
         for i in range(1, len(times_ordered)):
             if times_ordered[i] <= times_ordered[i - 1]:
                 times_ordered[i] = times_ordered[i - 1] + eps
 
-    # Calculate run AUC on the chronological incumbent sequence (no re-ordering)
+    # Calculate run AUC (unchanged; you asked to keep plotting AUC as-is)
     try:
         run_auc = float(np.trapz(acc_ordered, times_ordered))
     except Exception:
@@ -431,7 +461,7 @@ def plot_anytime_performance(
     combine_plots=True,
     durations_dir="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
     xscale="linear",  # NEW
-    t_markers=None,   # NEW
+    t_markers=None,  # NEW
 ):
     """
     Generates and saves anytime performance plots for all optimizers found in root_dir.

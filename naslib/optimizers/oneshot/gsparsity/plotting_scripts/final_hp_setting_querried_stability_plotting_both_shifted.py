@@ -265,6 +265,40 @@ def find_error_files(root_dir):
     return error_files
 
 
+def _dataset_random_guess(dataset: str, is_percent: bool) -> float:
+    k = DATASET_CLASSES.get(dataset, 10)
+    return (100.0 / k) if is_percent else (1.0 / k)
+
+
+def _inject_baseline_table_style(times, acc, dataset, acc_metric):
+    """
+    Same baseline behavior as the fixed-time table:
+      - train: 0.0; valid: random guess in same units as acc
+      - prepend (0, baseline) or overwrite first value at t=0
+    """
+    t = np.asarray(times, dtype=float)
+    a = np.asarray(acc, dtype=float)
+    if a.size == 0:
+        return np.array([0.0], dtype=float), np.array([0.0], dtype=float)
+
+    acc_is_percent = np.nanmax(a) > 1.5
+    baseline = (
+        0.0
+        if acc_metric == "train_acc"
+        else _dataset_random_guess(dataset, acc_is_percent)
+    )
+
+    if t.size == 0:
+        return np.array([0.0], dtype=float), np.array([baseline], dtype=float)
+    if t[0] > 0.0:
+        t = np.concatenate([[0.0], t])
+        a = np.concatenate([[baseline], a])
+    elif t[0] == 0.0:
+        a = a.copy()
+        a[0] = baseline
+    return t, a
+
+
 def process_run_data(filepath, acc_metric, dataset, zcp_pre_offset=0.0):
     """
     Loads and processes a single run from an errors.json file.
@@ -341,22 +375,17 @@ def process_run_data(filepath, acc_metric, dataset, zcp_pre_offset=0.0):
         cumulative_search_cost = np.cumsum(runtime)
         total_time = cumulative_search_cost + (eval_time if eval_time.size else 0)
 
-    # NEW: apply one-time shift for zcp-pre methods (only to real datapoints, not the t=0 point)
+    # NEW: apply one-time shift for zcp-pre methods (only to real datapoints)
     if zcp_pre_offset and zcp_pre_offset > 0:
         total_time = total_time + float(zcp_pre_offset)
 
     if len(acc) < 1:
         return None, None, None
 
-    # Random guess prepend (preserve raw units like queried acc)
-    num_classes = DATASET_CLASSES.get(dataset, 10)
-    acc_is_percent = np.nanmax(acc) > 1.5
-    random_guess_acc = (100.0 / num_classes) if acc_is_percent else (1.0 / num_classes)
+    # --- Table-consistent baseline injection for visual prefix ---
+    total_time, acc = _inject_baseline_table_style(total_time, acc, dataset, acc_metric)
 
-    total_time = np.insert(total_time, 0, 0)
-    acc = np.insert(acc, 0, random_guess_acc)
-
-    # Collapse duplicate timestamps: preserve first-occurrence order but keep latest raw value
+    # Collapse duplicates: keep last value for duplicate timestamps (as before)
     seen = {}
     order = []
     for t, a in zip(total_time, acc):
@@ -367,14 +396,14 @@ def process_run_data(filepath, acc_metric, dataset, zcp_pre_offset=0.0):
     times_ordered = np.array([float(t) for t in order], dtype=float)
     acc_ordered = np.array([seen[t] for t in order], dtype=float)
 
-    # enforce strictly increasing times for interpolation
+    # Ensure strictly increasing times
     if len(times_ordered) > 1:
         eps = 1e-6
         for i in range(1, len(times_ordered)):
             if times_ordered[i] <= times_ordered[i - 1]:
                 times_ordered[i] = times_ordered[i - 1] + eps
 
-    # Compute run AUC on the selected values
+    # AUC for stability plot (leave as-is)
     try:
         run_auc = float(np.trapz(acc_ordered, times_ordered))
     except Exception:
@@ -735,7 +764,6 @@ def plot_anytime_stability(
                         ax.set_xscale("symlog", linthresh=linthresh)
                     except TypeError:
                         ax.set_xscale("symlog", linthreshx=linthresh)
-                    ax.set_xlim(left=0)
                 else:
                     ax.set_xlim(left=0)
                 ax.set_ylim(bottom=0)

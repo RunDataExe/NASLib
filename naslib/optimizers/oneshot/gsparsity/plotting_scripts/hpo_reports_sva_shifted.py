@@ -33,6 +33,8 @@ MARKERS = ["o", "s", "+", "D", "x", "^", "*", "v", "<", ">", "p", "h", "H", "P"]
 
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
+plt.rcParams["savefig.dpi"] = 300
+plt.rcParams["savefig.format"] = "pdf"
 
 # ---- ZCP pre methods and durations loader (align with check_time_shifted_hp_choice.py) ----
 ZCP_PRE_METHODS = {
@@ -541,8 +543,8 @@ def make_fixed_time_reports(metas, studies, out_dir, durations_map=None):
         ]
         ax.legend(handles=handles, loc="center right")
 
-        out_png = os.path.join(out_dir, f"hpo_anytime_{dataset}.png")
-        plt.savefig(out_png, bbox_inches="tight")
+        out_png = os.path.join(out_dir, f"hpo_anytime_{dataset}.pdf")
+        plt.savefig(out_png, bbox_inches="tight", format="pdf")
         plt.close()
         print(f"Saved {out_png}")
 
@@ -1015,8 +1017,8 @@ def make_search_to_eval_transfer(
         ax.set_ylabel("Final Mean Validation Accuracy (%) [Linear Scale]")
         ax.set_title(f"HPO Phase -> Transfer -> Eval Phase | {ds}")
         ax.grid(True, ls="-", alpha=0.5)
-        out_png = os.path.join(out_dir, f"{ds}_search_to_eval_scatter.png")
-        plt.savefig(out_png, bbox_inches="tight")
+        out_png = os.path.join(out_dir, f"{ds}_search_to_eval_scatter.pdf")
+        plt.savefig(out_png, bbox_inches="tight", format="pdf")
         plt.close()
         print(f"Saved {out_png}")
 
@@ -1241,9 +1243,9 @@ def make_search_to_eval_transfer(
             ax.grid(True, ls="-", alpha=0.5)
 
             out_png = os.path.join(
-                out_dir, f"{src}_to_{dst}_search_to_eval_scatter.png"
+                out_dir, f"{src}_to_{dst}_search_to_eval_scatter.pdf"
             )
-            plt.savefig(out_png, bbox_inches="tight")
+            plt.savefig(out_png, bbox_inches="tight", format="pdf")
             plt.close()
             print(f"Saved {out_png}")
 

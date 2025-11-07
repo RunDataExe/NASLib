@@ -57,6 +57,37 @@ from matplotlib.patches import Patch
 # Dataset classes for random guess calculation
 DATASET_CLASSES = {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120}
 
+# NEW: default per-dataset T markers (seconds)
+DEFAULT_T_MARKERS = {
+    "ImageNet16-120": 36931.0,
+    "cifar10": 19432.0,
+    "cifar100": 20808.0,
+}
+
+
+def parse_t_markers(arg: str):
+    """
+    Parse CLI string like 'cifar10=18000,cifar100=20000,ImageNet16-120=36000'
+    and merge into defaults. Unknown datasets are added.
+    """
+    mapping = DEFAULT_T_MARKERS.copy()
+    if not arg:
+        return mapping
+    for part in arg.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            continue
+        ds, val = part.split("=", 1)
+        ds = ds.strip()
+        try:
+            mapping[ds] = float(val.strip())
+        except ValueError:
+            pass
+    return mapping
+
+
 # Default color and style settings for plots
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
@@ -361,12 +392,14 @@ def plot_anytime_stability(
     combine_plots=True,
     durations_dir="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
     xscale="linear",  # NEW
+    t_markers=None,  # NEW
 ):
     """
     Generates and saves anytime stability plots for all optimizers found in root_dir.
     """
     # NEW: load zcp-pre durations once
     durations_map = load_zcp_pre_durations(durations_dir)
+    t_markers = t_markers or DEFAULT_T_MARKERS  # NEW
     print(f"Searching for runs in: {root_dir}")
     files = find_error_files(root_dir)
     if not files:
@@ -616,8 +649,32 @@ def plot_anytime_stability(
             if not combine_plots:
                 from matplotlib.lines import Line2D
 
+                # NEW: draw per-dataset T marker (vertical line)
+                t_value = t_markers.get(dataset, None)
+                t_handle = None
+                if t_value is not None and np.isfinite(t_value) and t_value >= 0:
+                    ax.axvline(
+                        x=float(t_value),
+                        color="black",
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.85,
+                        zorder=7,
+                        label=f"T = {float(t_value):.0f} s",
+                    )
+                    # Ensure T is visible on axis
+                    x0, x1 = ax.get_xlim()
+                    if float(t_value) > x1:
+                        ax.set_xlim(x0, float(t_value) * 1.02)
+                    t_handle = Line2D([0], [0], color="black", linestyle="--")
+
                 # Use our prepared instability_handle (band may or may not have been drawn)
                 handles = [instability_handle]
+                labels = [instability_label]
+
+                if t_handle is not None:
+                    handles.append(t_handle)
+                    labels.append(f"T = {float(t_value):.0f} s")
 
                 # Create custom legend handles for each seed's marker
                 seed_handles = []
@@ -644,7 +701,7 @@ def plot_anytime_stability(
                 # Combine handles and create the legend
                 ax.legend(
                     handles=handles + seed_handles,
-                    labels=[instability_label] + seed_labels,
+                    labels=labels + seed_labels,
                     loc="upper left",
                     ncol=1,
                 )
@@ -915,6 +972,32 @@ def plot_anytime_stability(
             ax.set_xlim(left=0)
         else:
             ax.set_xlim(left=0)
+
+        # NEW: draw per-dataset vertical T marker in combined mode
+        t_value = t_markers.get(dataset, None)
+        t_handle = None
+        if (
+            t_value is not None
+            and np.isfinite(t_value)
+            and t_value > 0
+            and t_value <= ax.get_xlim()[1] * 1.2  # avoid absurd extension
+        ):
+            ax.axvline(
+                x=float(t_value),
+                color="black",
+                linestyle="--",
+                linewidth=1.3,
+                alpha=0.9,
+                zorder=8,
+            )
+            # If T is beyond current limit expand slightly
+            x0, x1 = ax.get_xlim()
+            if float(t_value) > x1:
+                ax.set_xlim(x0, float(t_value) * 1.05)
+            from matplotlib.lines import Line2D
+
+            t_handle = Line2D([0], [0], color="black", linestyle="--")
+
         ax.set_ylim(bottom=0)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.grid(True, which="both", ls="-", alpha=0.5)
@@ -975,6 +1058,13 @@ def main():
         default="linear",
         help="Scale for the x-axis (time).",
     )
+    # NEW: per-dataset T markers
+    parser.add_argument(
+        "--t_markers",
+        type=str,
+        default="",
+        help="Comma-separated dataset=time(s) pairs, e.g., 'cifar10=18000,cifar100=20000,ImageNet16-120=36000'.",
+    )
     parser.set_defaults(combine_plots=False, show_auc_text=False, show_auc_fill=False)
     args = parser.parse_args()
 
@@ -987,6 +1077,7 @@ def main():
         combine_plots=args.combine_plots,
         durations_dir=args.durations_dir,
         xscale=args.xscale,  # NEW
+        t_markers=parse_t_markers(args.t_markers),  # NEW
     )
 
 

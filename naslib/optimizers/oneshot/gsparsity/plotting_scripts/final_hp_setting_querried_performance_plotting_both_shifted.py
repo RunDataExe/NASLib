@@ -57,6 +57,36 @@ import matplotlib.colors as mcolors
 # Dataset classes for random guess calculation
 DATASET_CLASSES = {"cifar10": 10, "cifar100": 100, "ImageNet16-120": 120}
 
+# NEW: default per-dataset T markers (seconds)
+DEFAULT_T_MARKERS = {
+    "ImageNet16-120": 36931.0,
+    "cifar10": 19432.0,
+    "cifar100": 20808.0,
+}
+
+def parse_t_markers(arg: str):
+    """
+    Parse CLI string like 'cifar10=18000,cifar100=20000,ImageNet16-120=36000'
+    and merge into defaults. Unknown datasets are added.
+    """
+    mapping = DEFAULT_T_MARKERS.copy()
+    if not arg:
+        return mapping
+    for part in arg.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            continue
+        ds, val = part.split("=", 1)
+        ds = ds.strip()
+        try:
+            mapping[ds] = float(val.strip())
+        except ValueError:
+            pass
+    return mapping
+
+
 # Default color and style settings for plots
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linestyle"] = "dotted"
@@ -401,12 +431,14 @@ def plot_anytime_performance(
     combine_plots=True,
     durations_dir="naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor",
     xscale="linear",  # NEW
+    t_markers=None,   # NEW
 ):
     """
     Generates and saves anytime performance plots for all optimizers found in root_dir.
     """
     # NEW: load zcp-pre durations once
     durations_map = load_zcp_pre_durations(durations_dir)
+    t_markers = t_markers or DEFAULT_T_MARKERS  # NEW
     print(f"Searching for runs in: {root_dir}")
     files = find_error_files(root_dir)
     if not files:
@@ -699,7 +731,23 @@ def plot_anytime_performance(
                 from matplotlib.lines import Line2D
                 from matplotlib.patches import Patch
 
-                # Get existing handles and labels (should just be the mean line)
+                # NEW: draw per-dataset T marker (vertical line) before collecting handles
+                t_value = t_markers.get(dataset, None)
+                if t_value is not None and np.isfinite(t_value) and t_value >= 0:
+                    ax.axvline(
+                        x=float(t_value),
+                        color="black",
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.85,
+                        zorder=7,
+                        label=f"T = {float(t_value):.0f} s",
+                    )
+                    x0, x1 = ax.get_xlim()
+                    if float(t_value) > x1:
+                        ax.set_xlim(x0, float(t_value) * 1.02)
+
+                # Get existing handles and labels (should include mean line and T marker if present)
                 handles, labels = ax.get_legend_handles_labels()
 
                 # Create a handle for the standard deviation fill
@@ -1009,6 +1057,22 @@ def plot_anytime_performance(
             if show_auc_fill:
                 ax.fill_between(time_grid, 0, mean_acc, color=color, alpha=0.1)
 
+        # NEW: draw per-dataset T marker (vertical line) once per combined figure, before legend
+        t_value = t_markers.get(dataset, None)
+        if t_value is not None and np.isfinite(t_value) and t_value >= 0:
+            ax.axvline(
+                x=float(t_value),
+                color="black",
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.85,
+                zorder=7,
+                label=f"T = {float(t_value):.0f} s",
+            )
+            x0, x1 = ax.get_xlim()
+            if float(t_value) > x1:
+                ax.set_xlim(x0, float(t_value) * 1.02)
+
         # Build legend (method lines + std + seed markers)
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
@@ -1122,7 +1186,13 @@ def main():
         default="linear",
         help="Scale for the x-axis (time).",
     )
-    # python naslib/optimizers/oneshot/gsparsity/final_hp_setting_performance_plotting.py --combine_plots --show_auc_text --out_dir naslib/optimizers/oneshot/gsparsity/final_hp_visualization
+    # NEW: per-dataset T markers
+    parser.add_argument(
+        "--t_markers",
+        type=str,
+        default="",
+        help="Comma-separated dataset=time(s) pairs, e.g., 'cifar10=18000,cifar100=20000,ImageNet16-120=36000'.",
+    )
     parser.set_defaults(combine_plots=False, show_auc_text=False, show_auc_fill=False)
     args = parser.parse_args()
 
@@ -1135,6 +1205,7 @@ def main():
         combine_plots=args.combine_plots,
         durations_dir=args.durations_dir,
         xscale=args.xscale,  # NEW
+        t_markers=parse_t_markers(args.t_markers),  # NEW
     )
 
 

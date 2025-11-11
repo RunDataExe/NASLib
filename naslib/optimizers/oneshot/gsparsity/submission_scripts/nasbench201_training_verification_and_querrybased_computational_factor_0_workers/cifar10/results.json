@@ -1,0 +1,220 @@
+{
+    "summary": {
+        "computational_factor": {
+            "average": 369.10373496929714,
+            "std_dev": 78.78714480594338,
+            "min": 275.6471095772217,
+            "max": 462.9590017825311,
+            "count": 4,
+            "all_factors": [
+                462.9590017825311,
+                308.54455445544556,
+                429.2642740619902,
+                275.6471095772217
+            ]
+        },
+        "part_time_computational_factor": {
+            "average": 1.8455186748464858,
+            "std_dev": 0.3939357240297169,
+            "min": 1.3782355478861088,
+            "max": 2.3147950089126557,
+            "count": 4,
+            "all_factors": [
+                2.3147950089126557,
+                1.5427227722772279,
+                2.146321370309951,
+                1.3782355478861088
+            ]
+        },
+        "train_time": {
+            "queried": {
+                "average": 8.3575,
+                "std_dev": 2.549307504009667,
+                "min": 5.61,
+                "max": 11.59
+            },
+            "local": {
+                "average": 2884.91,
+                "std_dev": 272.3011165052396,
+                "min": 2597.2,
+                "max": 3194.75
+            },
+            "queried_minus_local": {
+                "average": -2876.5525,
+                "std_dev": 269.76734433350174,
+                "min": -3183.16,
+                "max": -2591.5899999999997
+            }
+        },
+        "part_time": {
+            "queried": {
+                "average": 1671.5,
+                "std_dev": 509.86150080193346,
+                "min": 1122.0,
+                "max": 2318.0
+            },
+            "local": {
+                "average": 2884.91,
+                "std_dev": 272.3011165052396,
+                "min": 2597.2,
+                "max": 3194.75
+            },
+            "queried_minus_local": {
+                "average": -1213.4099999999999,
+                "std_dev": 241.06276786347567,
+                "min": -1475.1999999999998,
+                "max": -876.75
+            }
+        },
+        "train_acc": {
+            "queried": {
+                "average": 99.179,
+                "std_dev": 0.5886416566978584,
+                "min": 98.348,
+                "max": 99.948
+            },
+            "local": {
+                "average": 99.075,
+                "std_dev": 0.6483355612643797,
+                "min": 98.116,
+                "max": 99.916
+            },
+            "queried_minus_local": {
+                "average": 0.1039999999999992,
+                "std_dev": 0.09152048950918465,
+                "min": 0.003999999999990678,
+                "max": 0.23199999999999932
+            }
+        },
+        "val_acc": {
+            "queried": {
+                "average": 86.85600000000001,
+                "std_dev": 1.6174424255595627,
+                "min": 84.62,
+                "max": 89.144
+            },
+            "local": {
+                "average": 86.773,
+                "std_dev": 1.5404658386345327,
+                "min": 85.3,
+                "max": 89.056
+            },
+            "queried_minus_local": {
+                "average": 0.08300000000000551,
+                "std_dev": 0.6332353432966255,
+                "min": -0.6799999999999926,
+                "max": 1.0679999999999978
+            }
+        },
+        "test_acc": {
+            "queried": {
+                "average": 86.85600000000001,
+                "std_dev": 1.6174424255595627,
+                "min": 84.62,
+                "max": 89.144
+            },
+            "local": {
+                "average": 86.5025,
+                "std_dev": 1.4456897142886496,
+                "min": 85.15,
+                "max": 88.7
+            },
+            "queried_minus_local": {
+                "average": 0.35350000000000037,
+                "std_dev": 0.7035046197431825,
+                "min": -0.6400000000000006,
+                "max": 1.3419999999999987
+            }
+        }
+    },
+    "results": [
+        {
+            "op_indices": [
+                1,
+                0,
+                3,
+                4,
+                0,
+                0
+            ],
+            "queried_train_time": 5.61,
+            "queried_train_acc": 98.348,
+            "queried_val_acc": 87.168,
+            "queried_test_acc": 87.168,
+            "local_train_time": 2597.2,
+            "local_train_acc": 98.116,
+            "local_val_acc": 87.312,
+            "local_test_acc": 86.9,
+            "computational_factor": 462.9590017825311,
+            "part_time_queried": 1122.0,
+            "part_time_computational_factor": 2.3147950089126557,
+            "seed_of_run": 1544457859
+        },
+        {
+            "op_indices": [
+                0,
+                3,
+                3,
+                4,
+                3,
+                4
+            ],
+            "queried_train_time": 10.1,
+            "queried_train_acc": 98.984,
+            "queried_val_acc": 84.62,
+            "queried_test_acc": 84.62,
+            "local_train_time": 3116.3,
+            "local_train_acc": 98.98,
+            "local_val_acc": 85.3,
+            "local_test_acc": 85.26,
+            "computational_factor": 308.54455445544556,
+            "part_time_queried": 2020.0,
+            "part_time_computational_factor": 1.5427227722772279,
+            "seed_of_run": 2092269736
+        },
+        {
+            "op_indices": [
+                1,
+                0,
+                0,
+                0,
+                4,
+                2
+            ],
+            "queried_train_time": 6.13,
+            "queried_train_acc": 99.948,
+            "queried_val_acc": 89.144,
+            "queried_test_acc": 89.144,
+            "local_train_time": 2631.39,
+            "local_train_acc": 99.916,
+            "local_val_acc": 89.056,
+            "local_test_acc": 88.7,
+            "computational_factor": 429.2642740619902,
+            "part_time_queried": 1226.0,
+            "part_time_computational_factor": 2.146321370309951,
+            "seed_of_run": 2152435495
+        },
+        {
+            "op_indices": [
+                4,
+                4,
+                2,
+                3,
+                3,
+                4
+            ],
+            "queried_train_time": 11.59,
+            "queried_train_acc": 99.436,
+            "queried_val_acc": 86.492,
+            "queried_test_acc": 86.492,
+            "local_train_time": 3194.75,
+            "local_train_acc": 99.288,
+            "local_val_acc": 85.424,
+            "local_test_acc": 85.15,
+            "computational_factor": 275.6471095772217,
+            "part_time_queried": 2318.0,
+            "part_time_computational_factor": 1.3782355478861088,
+            "seed_of_run": 3788705088
+        }
+    ]
+}

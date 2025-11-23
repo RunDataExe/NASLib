@@ -50,19 +50,25 @@ for out in "${OUT_DIRS[@]}"; do
   mkdir -p "$out"
 done
 
-# Run all combinations sequentially
 for out in "${OUT_DIRS[@]}"; do
   for d in cifar10 cifar100 ImageNet16-120; do
     for s in 1544457859 2092269736 3788705088; do
-      echo "Running: out_dir=$out, dataset=$d, seed=$s"
-      python naslib/optimizers/oneshot/gsparsity/configurator.py \
-        --optimizer random_search \
-        --search_space nasbench201 \
-        --dataset "$d" \
-        --seed "$s" \
-        --out_dir "$out" \
-        --search_epochs 300 \
-        --eval_epochs 1
+      for method in random_search random_sampling; do
+        if [[ "$method" == "random_search" ]]; then
+          search_epochs=300
+        else
+          search_epochs=1
+        fi
+        echo "Running: optimizer=$method, out_dir=$out, dataset=$d, seed=$s, epochs=$search_epochs"
+        python naslib/optimizers/oneshot/gsparsity/configurator.py \
+          --optimizer "$method" \
+          --search_space nasbench201 \
+          --dataset "$d" \
+          --seed "$s" \
+          --out_dir "$out" \
+          --search_epochs "$search_epochs" \
+          --eval_epochs 1
+      done
     done
   done
 done

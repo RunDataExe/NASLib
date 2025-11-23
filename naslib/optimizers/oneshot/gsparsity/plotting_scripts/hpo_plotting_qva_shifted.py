@@ -8,7 +8,6 @@ from optuna.trial import TrialState
 # Matplotlib to match your house style
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
-import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 
 # add: known search spaces from NASLib

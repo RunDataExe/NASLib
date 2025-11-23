@@ -41,20 +41,28 @@ conda activate 38_gs_nas
 cd "$SLURM_SUBMIT_DIR"
 
 # Ensure log/output dirs exist
-mkdir -p naslib/optimizers/oneshot/gsparsity/slurm
-OUT_DIR="naslib/optimizers/oneshot/gsparsity/result_final_hp"
+OUT_DIRS=(
+  "naslib/optimizers/oneshot/gsparsity/result_final_hp"
+  "naslib/optimizers/oneshot/gsparsity/result_final_hp_queried_val_acc"
+)
+
+for out in "${OUT_DIRS[@]}"; do
+  mkdir -p "$out"
+done
 
 # Run all combinations sequentially
-for d in cifar10 cifar100 ImageNet16-120; do
-  for s in 1544457859 2092269736 3788705088; do
-    echo "Running: dataset=$d, seed=$s"
-    python naslib/optimizers/oneshot/gsparsity/configurator.py \
-      --optimizer random_search \
-      --search_space nasbench201 \
-      --dataset "$d" \
-      --seed "$s" \
-      --out_dir "$OUT_DIR" \
-      --search_epochs 300 \
-      --eval_epochs 1
+for out in "${OUT_DIRS[@]}"; do
+  for d in cifar10 cifar100 ImageNet16-120; do
+    for s in 1544457859 2092269736 3788705088; do
+      echo "Running: out_dir=$out, dataset=$d, seed=$s"
+      python naslib/optimizers/oneshot/gsparsity/configurator.py \
+        --optimizer random_search \
+        --search_space nasbench201 \
+        --dataset "$d" \
+        --seed "$s" \
+        --out_dir "$out" \
+        --search_epochs 300 \
+        --eval_epochs 1
+    done
   done
 done

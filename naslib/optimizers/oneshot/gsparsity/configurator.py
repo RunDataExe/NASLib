@@ -39,30 +39,30 @@ from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_scaling_gs_nas impo
     ZCP_GSparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
     Bananas as SelfTrainingBananas,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
     Inverted_Bananas as SelfTrainingInvertedBananas,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
 )
 

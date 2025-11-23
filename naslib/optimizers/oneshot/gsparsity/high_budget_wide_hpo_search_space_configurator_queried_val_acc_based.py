@@ -37,30 +37,30 @@ from naslib.optimizers.oneshot.gsparsity.optimizers_used.zcp_scaling_gs_nas impo
     ZCP_GSparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_bananas_optimizer import (
     Bananas as SelfTrainingBananas,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_gsparse_optimizer import (
     Inverted_Bananas_GsparseOptimizer as SelfTrainingInvertedBananasGsparse,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_optimizer import (
     Inverted_Bananas as SelfTrainingInvertedBananas,
 )
 
-from naslib.optimizers.oneshot.gsparsity.old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.self_training_inverted_bananas.self_training_inverted_bananas_zcp_gsparse_optimizer import (
     Inverted_Bananas_ZCP_GsparseOptimizer as SelfTrainingInvertedBananasZCPGsparse,
 )
 
@@ -678,16 +678,6 @@ def objective(trial):
                 "train_portion": trial.suggest_float("train_portion", 0.8, 0.99),
             },
         }
-        # # Data augmentation
-        # cutout = trial.suggest_categorical("cutout", [False, True])
-        # config["search"]["cutout"] = cutout
-        # if cutout:
-        #     config["search"]["cutout_length"] = trial.suggest_int(
-        #         "cutout_length", 8, 20
-        #     )
-        #     config["search"]["cutout_prob"] = trial.suggest_float(
-        #         "cutout_prob", 0.5, 1.0
-        #     )
 
     # Suggest cutout parameter for relevant optimizers
     if optimizer_type in [
@@ -705,20 +695,6 @@ def objective(trial):
         config["search"]["cutout"] = cutout
         config["search"]["cutout_length"] = trial.suggest_int("cutout_length", 8, 24)
         config["search"]["cutout_prob"] = trial.suggest_float("cutout_prob", 0.1, 1.0)
-
-        # cutout = trial.suggest_categorical("cutout", [False, True])
-        # if cutout:
-        #     config["search"]["cutout"] = True
-        #     config["search"]["cutout_length"] = trial.suggest_int(
-        #         "cutout_length", 8, 24
-        #     )
-        #     config["search"]["cutout_prob"] = trial.suggest_float(
-        #         "cutout_prob", 0.1, 1.0
-        #     )
-        # else:
-        #     config["search"]["cutout"] = False
-        #     config["search"]["cutout_length"] = 0
-        #     config["search"]["cutout_prob"] = None
 
     if optimizer_type in [
         "inverted_bananas_gsparsity",

@@ -9,10 +9,10 @@ import json
 import os  # Import os for path checking
 
 from naslib.optimizers.core.metaclasses import MetaOptimizer
-from naslib.optimizers.oneshot.gsparsity.old_versions.pre_score_pruning_l2_final_discretication_decision_scaling.gsparsity_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.pre_score_pruning_l2_final_discretication_decision_scaling.gsparsity_optimizer import (
     GSparseOptimizer,
 )
-from naslib.optimizers.oneshot.gsparsity.old_versions.inverted_bananas.inverted_bananas_optimizer import (
+from naslib.optimizers.oneshot.gsparsity._old_versions.inverted_bananas.inverted_bananas_optimizer import (
     Inverted_Bananas,
 )
 from naslib.utils.remove_arch_from_search_space import (

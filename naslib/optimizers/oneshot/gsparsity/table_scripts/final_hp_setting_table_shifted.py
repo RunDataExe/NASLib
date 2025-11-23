@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source",
-        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo/WHPO_Databases_filtered",
+        default="naslib/optimizers/oneshot/gsparsity/results_wide_hpo_queried_val_acc/WHPO_Databases_filtered",
         help="SQLite DB file (*.db) or directory containing Optuna studies.",
     )
     parser.add_argument(

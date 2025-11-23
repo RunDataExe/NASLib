@@ -1,11 +1,11 @@
 # Exploring Zero-Cost Proxy-Guided One-Shot NAS: Ensemble Pre-Search Pruning and Saliency-Adaptive Regularization
-- [Thesis PDF](docs/thesis.pdf) 
+Code for my master’s thesis on zero-cost proxy-guided one-shot NAS over [NAS-Bench-201](https://arxiv.org/abs/2001.00326) (CIFAR-10/100, ImageNet16-120). It extends [Group-Sparsity NAS](https://opus.hs-offenburg.de/frontdoor/index/index/docId/5285) with ZCP-ensemble pre-search pruning ([Jacov](https://arxiv.org/abs/2006.04647), [SynFlow](https://arxiv.org/abs/2101.08134), Params) and saliency-adaptive regularization, and uses [DEHB](https://arxiv.org/abs/2105.09821) to run two HPO regimes with baselines and ablations.
 
 ## 1. Setup
 
 Set the environment up.
 
-```bash
+```python
 # Create environment from env file
 conda create -n 38_gs_nas --file gs_nas_exact_env.txt
 
@@ -33,8 +33,77 @@ Download the Datasets.
 gdown --folder https://drive.google.com/drive/folders/1T3UIyZXUhMmIuJLOBMIYKAsJknAtrrO4
 ```
 
+## 2. Precomputations
+### Computational Factor
+Submit the jobs that mimick the NAS-Bench-201 training pipeline.
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_training_verification_and_querrybased_computational_factor_0_workers
+```
+Use the results to calculate the computational factor that tries to bring queried computations into a common, local time unit.
+```python
+python naslib/utils/computational_factor_nasbench201_querry_archs_vs_selftraining_reconstruct_results.py \
+    --target_dir naslib/optimizers/oneshot/gsparsity/submission_scripts/
+    nasbench201_training_verification_and_querrybased_computational_factor_0_workers
+```
 
+### Pre-scoring NAS-Bench-201
+Zero-cost proxy prescoring to later safe the recomputations.
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/nasbench201_zc_scoring_timefactor
+```
 
+## 3. Hyperparameter optimization
+Generate the hyperparameter optimization scripts.
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/generate_wide_hpo_scripts_sva.py
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/generate_wide_hpo_scripts_qva.py
+```
+Submit the bash scripts.
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/wide_hpo --recursive
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/wide_hpo_queried_val_acc --recursive
+```
+Filter the database of the queried validation accuracy based hyperparameter optimization runs to enforce a common time horizon.
+```python
+python naslib/optimizers/oneshot/gsparsity/hpo_trial_filter_qva_shifted.py --results-root naslib/optimizers/oneshot/gsparsity/results_wide_hpo_queried_val_acc/WHPO --fast-prune --dest-dir naslib/optimizers/oneshot/gsparsity/results_wide_hpo_queried_val_acc/WHPO_Databases_filtered
+```
+
+## 4. Evaluation runs
+Generate the evaluation runs using the final hyperparameters
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/generate_final_hp_setting_scripts_sva_shifted.py
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/generate_final_hp_setting_scripts_qva.py
+```
+Submit the bash scripts for all evaluation runs.
+```python
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/wide_hpo --recursive
+python naslib/optimizers/oneshot/gsparsity/submission_scripts/submission.py --folder_path naslib/optimizers/oneshot/gsparsity/submission_scripts/final_hp_setting_runs_queried_val_acc --recursive
+```
+Submit the random search and random sampling runs.
+```bash
+sbatch naslib/optimizers/oneshot/gsparsity/submission_scripts/random_search_and_random_sampling_runs.sh
+```
+Truncate random search to match maximum time of the longest run per regime + regime specific additional budget for the hyperparameter optimization. (In the case of the queried validation accuracy experiment the default extra time changes --rs_extra_time = common time horizon from queried validation accuracy regime database filtering)
+```python
+python naslib/optimizers/oneshot/gsparsity/truncate_random_search_run_shifted.py
+python naslib/optimizers/oneshot/gsparsity/truncate_random_search_run_shifted.py --root_dir naslib/optimizers/oneshot/gsparsity/result_final_hp_queried_val_acc --rs_extra_time 1324210
+```
+## 5. Tables and Plots 
+Generate all result tables.
+```bash
+sbatch naslib/optimizers/oneshot/gsparsity/submission_scripts/hpo_and_evaluation_tables.sh
+```
+Generate all plots for the hyperparameter optimizations.
+```python
+python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_sva_shifted.py
+python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_qva_shifted.py
+```
+Generate all plots for the evaluation runs. Set --t_markers based on common time horizon from fixed time tables.
+```bash
+sbatch naslib/optimizers/oneshot/gsparsity/submission_scripts/evaluation_plotting.sh
+```
+
+## 6. General NASLib information and setup 
 <div align="center">
   ** For the <a href='https://codalab.lisn.upsaclay.fr/competitions/3932'>Zero-Cost NAS Competition</a>, please switch to the <a href='https://github.com/automl/NASLib/tree/automl-conf-competition'><code>automl-conf-competition</code></a> branch ** <br><br>
 

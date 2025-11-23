@@ -1,3 +1,40 @@
+# Exploring Zero-Cost Proxy-Guided One-Shot NAS: Ensemble Pre-Search Pruning and Saliency-Adaptive Regularization
+- [Thesis PDF](docs/thesis.pdf) 
+
+## 1. Setup
+
+Set the environment up.
+
+```bash
+# Create environment from env file
+conda create -n 38_gs_nas --file gs_nas_exact_env.txt
+
+# Activate environment
+conda activate 38_gs_nas
+
+# Upgrade core packages (no dependency resolution)
+pip install --upgrade --no-deps "xgboost==1.6.2" "scipy==1.10.1" "numpy==1.23.5"
+
+# Install NASLib in editable mode (no deps)
+pip install -e --no-deps
+
+# Install remaining Python dependencies
+pip install -r pip_requirements_app.txt
+```
+Download NAS-Bench-201.
+```bash
+!source /content/NASLib/scripts/bash_scripts/download_benchmarks.sh nb201 cifar10
+!source /content/NASLib/scripts/bash_scripts/download_benchmarks.sh nb201 cifar100
+!source /content/NASLib/scripts/bash_scripts/download_benchmarks.sh nb201 ImageNet16-120
+!source scripts/zc/bash_scripts/download_nbs_zero.sh nb201
+```
+Download the Datasets.
+```bash
+gdown --folder https://drive.google.com/drive/folders/1T3UIyZXUhMmIuJLOBMIYKAsJknAtrrO4
+```
+
+
+
 <div align="center">
   ** For the <a href='https://codalab.lisn.upsaclay.fr/competitions/3932'>Zero-Cost NAS Competition</a>, please switch to the <a href='https://github.com/automl/NASLib/tree/automl-conf-competition'><code>automl-conf-competition</code></a> branch ** <br><br>
 

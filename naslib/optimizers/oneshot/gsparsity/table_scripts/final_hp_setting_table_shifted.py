@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="naslib/optimizers/oneshot/gsparsity/table_scripts/tables/final_hp_summary.xlsx",
+        default="naslib/optimizers/oneshot/gsparsity/table_scripts/tables/qva/final_hp_setting.xlsx",
         help="Excel file to create.",
     )
     # NEW: durations-dir used for time-shift offset (same default as check script)

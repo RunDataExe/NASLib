@@ -93,12 +93,7 @@ Generate all result tables.
 ```bash
 sbatch naslib/optimizers/oneshot/gsparsity/submission_scripts/hpo_and_evaluation_tables.sh
 ```
-Generate all plots for the hyperparameter optimizations.
-```python
-python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_sva_shifted.py
-python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_qva_shifted.py
-```
-Generate all plots for the evaluation runs. Set --t_markers based on common time horizon from fixed time tables.
+Generate all plots. Set --t_markers based on common time horizon from fixed time tables.
 ```bash
 sbatch naslib/optimizers/oneshot/gsparsity/submission_scripts/evaluation_plotting.sh
 ```

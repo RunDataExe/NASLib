@@ -5,32 +5,14 @@ import torch.nn.functional as F
 # from naslib.predictors import ZeroCost
 from naslib.predictors.zerocost_no_post_processing import (
     ZeroCost,
-)  # Ensure this import matches your project structure
+)
 import logging
-import math  # Ensure math is imported for isnan/isinf if used by ZeroCost or its callees
-from naslib.search_spaces.core.primitives import AbstractPrimitive  # Add this import
+import math
+from naslib.search_spaces.core.primitives import AbstractPrimitive
 
 logger = logging.getLogger(__name__)
 
 
-# def adapt_spatial(x, target_h, target_w):
-#     """Adapt tensor spatial dimensions to target"""
-
-#     h, w = x.shape[-2:]
-
-#     if h < target_h or w < target_w:
-#         pad_h = max(0, target_h - h)
-#         pad_w = max(0, target_w - w)
-#         padding = (pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2)
-#         x = F.pad(x, padding)
-
-#     if h > target_h or w > target_w:
-#         start_h = (h - target_h) // 2
-#         start_w = (w - target_w) // 2
-#         x = x[:, :, start_h : start_h + target_h, start_w : start_w + target_w]
-
-
-#     return x
 def adapt_spatial(x, target_h, target_w):
     """
     Adapt tensor spatial dimensions to target using interpolation.
@@ -41,8 +23,6 @@ def adapt_spatial(x, target_h, target_w):
     if current_h == target_h and current_w == target_w:
         return x
 
-    # Use bilinear interpolation for resizing. It's parameter-free and considers all input pixels.
-    # 'align_corners=False' is recommended for feature maps.
     return F.interpolate(
         x, size=(target_h, target_w), mode="bilinear", align_corners=False
     )
@@ -177,7 +157,6 @@ class SyntheticMicroArchitecture(nn.Module):
 
         self.spatial_reducer = nn.AdaptiveAvgPool2d((1, 1))
 
-        # classifier_in_features = self.fixed_intermediate_channel_dim
         classifier_in_features = self.expected_op_output_C
         if classifier_in_features == 0:
             logger.warning(
@@ -214,22 +193,8 @@ class SyntheticMicroArchitecture(nn.Module):
         # 3. Spatially reduce the operation's output
         x_pooled = self.spatial_reducer(op_output)
 
-        # 4. Adapt channels to the fixed_intermediate_channel_dim using the fair method
-        # x_channels_adapted = adapt_channels_fairly(
-        #     x_pooled, self.fixed_intermediate_channel_dim
-        # )
-
-        # 5. Flatten for the classifier
+        # 4. Flatten for the classifier
         x_flattened = torch.flatten(x_pooled, start_dim=1)
-
-        # if would use fixed and intermediat adaption
-        # # 4. Adapt channels to the fixed_intermediate_channel_dim using the fair method
-        # x_channels_adapted = adapt_channels_fairly(
-        #     x_pooled, self.fixed_intermediate_channel_dim
-        # )
-
-        # 5. Flatten for the classifier
-        # x_flattened = torch.flatten(x_channels_adapted, start_dim=1)
 
         if x_flattened.shape[1] != self.classifier.in_features:
             logger.warning(
@@ -249,10 +214,8 @@ class SyntheticMicroArchitecture(nn.Module):
                     device=x_flattened.device,
                     dtype=x_flattened.dtype,
                 )
-            # Consider if a more general reshape or error is needed if other mismatches occur
-            # For now, this handles the zero-channel to classifier_in_features=1 case.
 
-        # 6. Classify
+        # 5. Classify
         final_logits = self.classifier(x_flattened)
         return final_logits
 
@@ -288,17 +251,6 @@ def evaluate_micro_architecture_zcp(
     """
     if zcp_method.lower() in ["params"]:
         params = sum(p.numel() for p in operation.parameters())
-        # intermediate_params = torch.log(
-        #     torch.tensor(params, dtype=torch.float32) / 100 + 1e-6
-        # )
-        # final_param = torch.sigmoid(torch.tensor(params, dtype=torch.float32)).item()
-        # final_param_scaled = torch.sigmoid(
-        #     torch.tensor(intermediate_params, dtype=torch.float32)
-        # ).item()
-        # logger.info(
-        #     f"Raw params: {params:.6f}, Log-scaled params: {intermediate_params:.6f}, Sigmoid mapped without log-scaling params: {final_param:.6f}, Sigmoid mapped with log-scaling params: {final_param_scaled:.6f}"
-        # )
-        # return final_param_scaled
         return params
 
     # Determine num_classes based on the dataset
@@ -365,9 +317,7 @@ def evaluate_micro_architecture_zcp(
         num_classes,
     )
 
-    # Configuration for SyntheticMicroArchitecture
-    fixed_intermediate_dim = 256  # Example fixed dimension
-    # channel_adaptation_method is now fixed to 'fair' internally in SyntheticMicroArchitecture
+    fixed_intermediate_dim = 256  #
 
     try:
         synthetic_net = SyntheticMicroArchitecture(
@@ -389,26 +339,10 @@ def evaluate_micro_architecture_zcp(
             logger.warning(
                 f"ZCP returned problematic score ({score}) for {type(operation).__name__}. Defaulting to 0.0, which sigmoid will map to 0.5."
             )
-            # For sigmoid, a raw score of 0.0 results in 0.5.
-            # If a true "failure" score of 0.0 post-sigmoid is desired,
-            # a very negative number could be used, e.g., -float('inf'),
-            # but 0.0 raw is a neutral point for sigmoid.
-            # Let's return 0.5 in this case (sigmoid(0))
+
             return torch.sigmoid(torch.tensor(0.0)).item()
 
-        #! synflow has negative and positive scores?
-
-        # Some ZCP methods like 'grasp' are lower-is-better.
-        # We want higher-is-better for the optimizer, so invert if necessary.
-        # Check specific ZCP literature for their interpretation.
-        # Assuming synflow, jacov, snip, fisher, grad_norm are higher-is-better.
         if zcp_method.lower() in ["grasp"]:
-            # For methods where lower score is better, invert the relationship.
-            # Avoid division by zero. Add small epsilon if score can be 0.
-            # Note: Inverting and then applying sigmoid might not be ideal.
-            # Consider if the "lower-is-better" logic should be handled before sigmoid,
-            # or if the raw score should be negated before sigmoid for such cases.
-            # For now, applying inversion as before.
             intermediate_score = (
                 1.0 / (score + 1e-10) if abs(score) < 1e-9 else 1.0 / score
             )

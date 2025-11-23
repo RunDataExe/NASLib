@@ -35,8 +35,8 @@ conda activate 38_gs_nas
 cd "$SLURM_SUBMIT_DIR"
 
 declare -A ROOT_TO_OUT=(
-  ["naslib/optimizers/oneshot/gsparsity/result_final_hp"]="naslib/optimizers/oneshot/gsparsity/plotting_scripts/sva_evaluation"
-  ["naslib/optimizers/oneshot/gsparsity/result_final_hp_queried_val_acc"]="naslib/optimizers/oneshot/gsparsity/plotting_scripts/qva_evaluation"
+  ["naslib/optimizers/oneshot/gsparsity/result_final_hp"]="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/sva_evaluation"
+  ["naslib/optimizers/oneshot/gsparsity/result_final_hp_queried_val_acc"]="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/qva_evaluation"
 )
 
 for ROOT in "${!ROOT_TO_OUT[@]}"; do
@@ -70,8 +70,15 @@ for ROOT in "${!ROOT_TO_OUT[@]}"; do
   python naslib/optimizers/oneshot/gsparsity/plotting_scripts/final_hp_setting_precentile_plotting_both.py \
     --root_dir "$ROOT" \
     --out_dir "$OUT" \
-    --combine_plots \
-    --t_markers "$T_MARKERS"
+    --combine_plots
 done
+
+
+echo "SVA HPO plots"
+python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_sva_shifted.py
+
+echo "QVA HPO plots"
+python naslib/optimizers/oneshot/gsparsity/plotting_scripts/hpo_plotting_qva_shifted.py
+
 
 echo "All plotting finished."

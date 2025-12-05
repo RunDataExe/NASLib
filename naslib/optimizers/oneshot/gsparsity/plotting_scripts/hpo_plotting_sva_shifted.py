@@ -1258,7 +1258,7 @@ def main():
     )
     ap.add_argument(
         "--out_dir",
-        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/sva_hpo",
+        default="naslib/optimizers/oneshot/gsparsity/plotting_scripts/plots/sva_hpo",
     )
     ap.add_argument("--search_space", default="nasbench201")
     ap.add_argument(
